@@ -60,6 +60,14 @@
             android:layout_height="wrap_content"
             android:inputType="text" />
 
+        <TextView style="@style/Label" android:text="@string/poll_delay" />
+
+        <EditText
+            android:id="@+id/pollDelay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:maxLength="2" />
 
         <TextView style="@style/Label" android:text="@string/reply_timeout" />
 
@@ -69,6 +77,26 @@
             android:layout_height="wrap_content"
             android:inputType="number"
             android:maxLength="3" />
+
+        <CheckBox
+            android:id="@+id/periodic"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/periodic"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/periodicLabel"
+            style="@style/Label"
+            android:layout_marginTop="4dp" />
+
+        <SeekBar
+            android:id="@+id/periodicInterval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" />
 
         <Button
             android:id="@+id/save"

@@ -7,7 +7,9 @@
     <string name="sim">SIM-карта, с которой слать SMS</string>
     <string name="sim_default">По умолчанию для SMS</string>
     <string name="password">Пароль модуля (если задан командой PASS)</string>
-    <string name="reply_timeout">Таймаут ожидания ответа от Altox, с (10–900)</string>
+    <string name="reply_timeout">Таймаут ожидания ответа от Altox, с (10–300)</string>
+    <string name="poll_delay">Запрос статуса после команды через, с (3–60)</string>
+    <string name="periodic">Опрашивать отопитель, пока он включён (температура, бортсеть)</string>
     <string name="back">Назад</string>
     <string name="save">Сохранить</string>
 </resources>

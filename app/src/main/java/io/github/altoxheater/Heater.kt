@@ -36,17 +36,22 @@ object Heater {
     const val ON = "ON"
     const val STOPPING = "STOPPING"
 
-    /** When to ask STATUS after a command (counted from sending it), how often to repeat, when to give up */
-    private class Timing(val firstPoll: Long, val pollEvery: Long, val timeout: Long)
+    // After a command: the first STATUS after pollDelay() (the module shows HEATER ON / HEATER
+    // OFF right away, the flame and the purge come later, so normally that confirms it), then
+    // every POLL_EVERY while the state is not the wanted one, for up to POLL_WINDOW more
+    private const val POLL_EVERY = 12_000L
+    private const val POLL_WINDOW = 50_000L
 
-    // The module shows HEATER ON / HEATER OFF right after the command (the flame and the purge
-    // come later), so normally the first STATUS confirms it
-    private val START = Timing(6_000, 12_000, 60_000)
-    private val STOP = Timing(8_000, 12_000, 60_000)
+    /** Settings' defaults and ranges, seconds */
+    const val POLL_DELAY_DEFAULT = 6
+    val POLL_DELAY_RANGE = 3..60
+    const val REPLY_TIMEOUT_DEFAULT = 60
+    val REPLY_TIMEOUT_RANGE = 10..300
+    const val PERIODIC_DEFAULT = 300
+    val PERIODIC_STEPS = listOf(30, 60, 120, 180, 300, 600)
 
-    /** How long to wait for a reply to STATUS, seconds: the setting's default and range */
-    const val REPLY_TIMEOUT_DEFAULT = 120
-    val REPLY_TIMEOUT_RANGE = 10..900
+    /** A heater that stops this much before the end of the run stopped on its own: a problem */
+    private const val EARLY_STOP = 2 * 60_000L
     /** Some phones never report the SMS as sent: then count it as sent after this */
     private const val SENT_TIMEOUT = 60_000L
 
@@ -59,6 +64,9 @@ object Heater {
     const val PASSWORD = "password" // written before each command, if PASS is set on the module
     const val MINUTES = "minutes" // run time for START, the slider on the main screen
     const val REPLY_TIMEOUT = "replyTimeout" // seconds, see replyTimeout()
+    const val POLL_DELAY = "pollDelay" // seconds from a command to its STATUS
+    const val PERIODIC = "periodic" // STATUS every PERIODIC_INTERVAL while heating
+    const val PERIODIC_INTERVAL = "periodicInterval" // seconds, one of PERIODIC_STEPS
 
     // Command in progress
     const val STATE = "state"
@@ -78,6 +86,8 @@ object Heater {
 
     // Status
     const val STATUS_SENT = "statusSent" // 0 if no STATUS is waiting for a reply
+    const val STATUS_AUTO = "statusAuto" // that STATUS is a periodic one: the buttons stay free
+    const val AUTO_SENT = "autoSent" // the last periodic STATUS
     const val STATUS_TIME = "statusTime"
     const val COOLANT = "coolant"
     const val CABIN = "cabin"
@@ -102,6 +112,17 @@ object Heater {
         return RUN_MINUTES.minBy { abs(it - saved) }
     }
 
+    fun pollDelay(ctx: Context) =
+        prefs(ctx).getInt(POLL_DELAY, POLL_DELAY_DEFAULT).coerceIn(POLL_DELAY_RANGE) * 1000L
+
+    /** Interval of the periodic STATUS while heating, ms; 0 if it is off */
+    fun periodic(ctx: Context): Long {
+        val p = prefs(ctx)
+        if (!p.getBoolean(PERIODIC, false)) return 0
+        val saved = p.getInt(PERIODIC_INTERVAL, PERIODIC_DEFAULT)
+        return PERIODIC_STEPS.minBy { abs(it - saved) } * 1000L
+    }
+
     /** How long to wait for a reply to STATUS, ms */
     fun replyTimeout(ctx: Context) =
         prefs(ctx).getInt(REPLY_TIMEOUT, REPLY_TIMEOUT_DEFAULT).coerceIn(REPLY_TIMEOUT_RANGE) * 1000L
@@ -113,7 +134,7 @@ object Heater {
     fun stop(ctx: Context) = command(ctx, "STOP", STOPPING)
 
     fun requestStatus(ctx: Context) {
-        prefs(ctx).edit().putLong(STATUS_SENT, now()).remove(MESSAGE).commit()
+        prefs(ctx).edit().putLong(STATUS_SENT, now()).putBoolean(STATUS_AUTO, false).remove(MESSAGE).commit()
         if (!send(ctx, "STATUS", KIND_STATUS)) statusFailed(ctx, "Не удалось отправить SMS")
         else scheduleWake(ctx)
     }
@@ -138,9 +159,9 @@ object Heater {
         val p = prefs(ctx)
         val state = p.getString(STATE, OFF)
         if (!isPending(state) || p.getLong(CMD_SENT_AT, 0) > 0) return
-        val t = timing(state)
-        p.edit().putLong(CMD_SENT_AT, at).putLong(DEADLINE, at + t.timeout).commit()
-        planPoll(ctx, at + t.firstPoll)
+        val first = at + pollDelay(ctx)
+        p.edit().putLong(CMD_SENT_AT, at).putLong(DEADLINE, first + POLL_WINDOW).commit()
+        planPoll(ctx, first)
     }
 
     fun commandFailed(ctx: Context, message: String) {
@@ -165,8 +186,6 @@ object Heater {
         notify(ctx, "Статус не получен", message)
     }
 
-    private fun timing(state: String?) = if (state == STARTING) START else STOP
-
     private fun planPoll(ctx: Context, at: Long) {
         prefs(ctx).edit().putLong(POLL_AT, at).putLong(POLL_FROM, now()).commit()
         scheduleWake(ctx)
@@ -183,7 +202,16 @@ object Heater {
             p.getLong(POLL_AT, 0).takeIf { isPending(state) && it > 0 },
             statusSent.takeIf { it > 0 }?.let { it + replyTimeout(ctx) + 1 },
             p.getLong(ENDS_AT, 0).takeIf { state == ON && it > 0 },
+            periodicAt(ctx).takeIf { state == ON && statusSent == 0L && it > 0 },
         ).minOrNull() ?: 0
+    }
+
+    /** When the next periodic STATUS is due: an interval after the last status or request */
+    private fun periodicAt(ctx: Context): Long {
+        val interval = periodic(ctx)
+        if (interval == 0L) return 0
+        val p = prefs(ctx)
+        return maxOf(p.getLong(STATUS_TIME, 0), p.getLong(AUTO_SENT, 0), p.getLong(ON_SINCE, 0)) + interval
     }
 
     /**
@@ -208,8 +236,9 @@ object Heater {
     private const val CHANNEL = "heater"
 
     /** Tells the result of a command when the app is not on screen */
-    private fun notify(ctx: Context, title: String, text: String) {
-        if (foreground) return
+    /** [always]: also with the app on screen, for something going wrong on its own */
+    private fun notify(ctx: Context, title: String, text: String, always: Boolean = false) {
+        if (foreground && !always) return
         if (Build.VERSION.SDK_INT >= 33 &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val nm = ctx.getSystemService(NotificationManager::class.java)
@@ -254,6 +283,14 @@ object Heater {
             p.edit().putString(STATE, OFF).commit()
             scheduleWake(ctx)
             notify(ctx, "Нагрев завершён", "Время работы истекло")
+            return
+        }
+        val periodicAt = periodicAt(ctx)
+        if (state == ON && statusSent == 0L && periodicAt in 1..now) {
+            // Fresh temperatures and voltage; does not lock the buttons, see STATUS_AUTO
+            p.edit().putLong(STATUS_SENT, now).putBoolean(STATUS_AUTO, true).putLong(AUTO_SENT, now).commit()
+            if (!send(ctx, "STATUS", KIND_STATUS)) statusFailed(ctx, "Не удалось отправить SMS")
+            else scheduleWake(ctx)
         }
     }
 
@@ -376,7 +413,7 @@ object Heater {
             }
             isPending(state) -> {
                 e.commit()
-                val next = now + timing(state).pollEvery
+                val next = now + POLL_EVERY
                 if (next > p.getLong(DEADLINE, 0)) {
                     p.edit().putString(PREV_STATE, if (s.on) ON else OFF).commit()
                     commandFailed(ctx, if (state == STARTING) "Отопитель не запустился" else "Отопитель не остановился")
@@ -389,7 +426,16 @@ object Heater {
                 e.putString(STATE, ON).putLong(ON_SINCE, now)
                     .putLong(RUN_TOTAL, run).putLong(ENDS_AT, if (run > 0) now + run else 0)
             }
-            !s.on -> e.putString(STATE, OFF)
+            !s.on -> {
+                e.putString(STATE, OFF)
+                val endsAt = p.getLong(ENDS_AT, 0)
+                if (state == ON && endsAt > 0 && now < endsAt - EARLY_STOP) {
+                    val left = (endsAt - now + 59_999) / 60_000
+                    val text = "Выключился за $left мин до конца" + (s.coolant?.let { ", ОЖ $it °C" } ?: "")
+                    e.putString(MESSAGE, "Отопитель выключился раньше срока")
+                    notify(ctx, "Отопитель выключился раньше срока", text, always = true)
+                } else if (state == ON) notify(ctx, "Нагрев завершён", s.coolant?.let { "ОЖ $it °C" } ?: "")
+            }
         }
         e.commit()
         scheduleWake(ctx)

@@ -21,6 +21,7 @@ class MainActivity : Activity() {
     private lateinit var power: RoundButton
     private lateinit var caption: TextView
     private lateinit var message: TextView
+    private lateinit var minutesTitle: TextView
     private lateinit var minutesLabel: TextView
     private lateinit var minutes: SeekBar
     private lateinit var status: RoundButton
@@ -47,6 +48,7 @@ class MainActivity : Activity() {
         power = findViewById(R.id.power)
         caption = findViewById(R.id.caption)
         message = findViewById(R.id.message)
+        minutesTitle = findViewById(R.id.minutesTitle)
         minutesLabel = findViewById(R.id.minutesLabel)
         minutes = findViewById(R.id.minutes)
         status = findViewById(R.id.status)
@@ -124,6 +126,8 @@ class MainActivity : Activity() {
         val pending = Heater.isPending(state)
         // A manual status request; while a command runs, STATUS is part of it
         val statusBusy = !pending && prefs.getLong(Heater.STATUS_SENT, 0) > 0
+        // A periodic STATUS while heating does not lock Stop
+        val powerLocked = statusBusy && !prefs.getBoolean(Heater.STATUS_AUTO, false)
 
         power.label = when (state) {
             Heater.STARTING -> "Запуск..."
@@ -137,8 +141,8 @@ class MainActivity : Activity() {
             state == Heater.ON -> R.color.btn_on
             else -> R.color.btn_off
         })
-        power.isEnabled = configured && !pending && !statusBusy
-        power.alpha = if (configured && statusBusy) 0.5f else 1f
+        power.isEnabled = configured && !pending && !powerLocked
+        power.alpha = if (configured && powerLocked) 0.5f else 1f
 
         status.fill = getColor(when {
             !configured -> R.color.btn_disabled
@@ -164,7 +168,8 @@ class MainActivity : Activity() {
         minutes.progressTintList = tint
         minutes.thumbTintList = tint
         if (state != Heater.ON) {
-            minutesLabel.text = "Время работы: ${Heater.minutes(this)} мин"
+            minutesTitle.text = "Время работы"
+            minutesLabel.text = "${Heater.minutes(this)} мин"
             minutes.progress = position(Heater.minutes(this).toDouble())
         }
 
@@ -212,13 +217,15 @@ class MainActivity : Activity() {
                 if (endsAt > 0 && total > 0) {
                     val left = maxOf(endsAt - now, 0)
                     power.progress = left.toFloat() / total
-                    minutesLabel.text = String.format(Locale.US, "Осталось %02d мин : %04.1f сек",
+                    minutesTitle.text = "Осталось"
+                    minutesLabel.text = String.format(Locale.US, "%02d мин : %04.1f сек",
                         left / 60_000, left % 60_000 / 1000.0)
                     minutes.progress = position(left / 60_000.0)
                 } else {
                     // Started elsewhere, the run time is unknown
                     power.progress = -1f
-                    minutesLabel.text = "Работает " + clock(now - prefs.getLong(Heater.ON_SINCE, now))
+                    minutesTitle.text = "Работает"
+                    minutesLabel.text = clock(now - prefs.getLong(Heater.ON_SINCE, now))
                 }
             }
             else -> {
@@ -262,7 +269,7 @@ class MainActivity : Activity() {
         return ((i + part) * STEP).toInt()
     }
 
-    /** "только что", "15 секунд назад", "23 минуты 21 секунду назад" within an hour, then
+    /** "только что", "15 с назад", "23 мин 21 с назад" within an hour (short, to stay on one line), then
      * "сегодня 19:38:25", "вчера 23:10:05", "14 окт 04:01:00" */
     private fun whenText(ms: Long, now: Long): String {
         val ago = (now - ms) / 1000
@@ -271,9 +278,9 @@ class MainActivity : Activity() {
             val s = ago % 60
             return when {
                 ago == 0L -> "только что"
-                m == 0L -> "$s ${plural(s, "секунду", "секунды", "секунд")} назад"
-                s == 0L -> "$m ${plural(m, "минуту", "минуты", "минут")} назад"
-                else -> "$m ${plural(m, "минуту", "минуты", "минут")} $s ${plural(s, "секунду", "секунды", "секунд")} назад"
+                m == 0L -> "$s с назад"
+                s == 0L -> "$m мин назад"
+                else -> "$m мин $s с назад"
             }
         }
         val c = Calendar.getInstance().apply { timeInMillis = ms }
@@ -288,13 +295,6 @@ class MainActivity : Activity() {
         }
         return String.format(Locale.US, "%s %02d:%02d:%02d", day,
             c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), c.get(Calendar.SECOND))
-    }
-
-    private fun plural(n: Long, one: String, few: String, many: String) = when {
-        n % 100 in 11..14 -> many
-        n % 10 == 1L -> one
-        n % 10 in 2..4 -> few
-        else -> many
     }
 
     companion object {
