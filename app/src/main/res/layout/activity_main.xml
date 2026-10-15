@@ -47,6 +47,7 @@
         android:textSize="15sp" />
 
     <!-- Title left, value right with fixed-width digits: nothing moves while dragging or ticking -->
+    <!-- As wide as the slider's track below: the slider minus its side padding -->
     <LinearLayout
         android:layout_width="248dp"
         android:layout_height="wrap_content"
@@ -70,11 +71,15 @@
             android:textSize="15sp" />
     </LinearLayout>
 
+    <!-- Tall touch area, thick track and a big thumb: easy to hit -->
     <SeekBar
         android:id="@+id/minutes"
         android:layout_width="280dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp" />
+        android:layout_height="56dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:progressDrawable="@drawable/slider_track"
+        android:thumb="@drawable/slider_thumb" />
 
     <Space
         android:layout_width="0dp"

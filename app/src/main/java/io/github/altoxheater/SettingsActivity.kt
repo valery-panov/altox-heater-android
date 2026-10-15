@@ -86,8 +86,8 @@ class SettingsActivity : Activity() {
             periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) ||
             interval() != savedInterval()
         periodicInterval.isEnabled = periodic.isChecked
-        periodicLabel.text = "Раз в " + intervalText(interval()) +
-            ", это ${3600 / interval()} SMS в час"
+        val perHour = if (3600 % interval() == 0) ", это ${3600 / interval()} SMS в час" else ""
+        periodicLabel.text = "Раз в " + intervalText(interval()) + perHour
     }
 
     private fun savedTimeout() = (Heater.replyTimeout(this) / 1000).toInt()
@@ -96,7 +96,7 @@ class SettingsActivity : Activity() {
         .let { saved -> Heater.PERIODIC_STEPS.minBy { abs(it - saved) } }
     private fun interval() = Heater.PERIODIC_STEPS[periodicInterval.progress]
 
-    private fun intervalText(s: Int) = if (s < 60) "$s с" else "${s / 60} мин"
+    private fun intervalText(s: Int) = if (s >= 3600) "час" else "${s / 60} мин"
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         fillSims()

@@ -47,8 +47,8 @@ object Heater {
     val POLL_DELAY_RANGE = 3..60
     const val REPLY_TIMEOUT_DEFAULT = 60
     val REPLY_TIMEOUT_RANGE = 10..300
-    const val PERIODIC_DEFAULT = 300
-    val PERIODIC_STEPS = listOf(30, 60, 120, 180, 300, 600)
+    const val PERIODIC_DEFAULT = 600
+    val PERIODIC_STEPS = listOf(300, 600, 900, 1200, 1800, 2700, 3600)
 
     /** A heater that stops this much before the end of the run stopped on its own: a problem */
     private const val EARLY_STOP = 2 * 60_000L
@@ -56,7 +56,7 @@ object Heater {
     private const val SENT_TIMEOUT = 60_000L
 
     /** Run times on the slider: fine steps for short runs, coarse for long ones */
-    val RUN_MINUTES = listOf(10, 11, 12, 13, 14, 15, 17, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 105, 120)
+    val RUN_MINUTES = listOf(10, 11, 12, 13, 14, 15, 17, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 120)
 
     // Settings
     const val PHONE = "phone"

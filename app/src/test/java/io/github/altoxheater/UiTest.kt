@@ -268,6 +268,13 @@ class UiTest {
         val timeout = a.findViewById<android.widget.EditText>(R.id.replyTimeout)
         assertEquals("60", timeout.text.toString())
         assertEquals("6", a.findViewById<android.widget.EditText>(R.id.pollDelay).text.toString())
+        assertEquals("Раз в 10 мин, это 6 SMS в час", text(a, R.id.periodicLabel))
+        val periodicBar = a.findViewById<SeekBar>(R.id.periodicInterval)
+        periodicBar.progress = periodicBar.max
+        assertEquals("Раз в час, это 1 SMS в час", text(a, R.id.periodicLabel))
+        periodicBar.progress = Heater.PERIODIC_STEPS.indexOf(2700)
+        assertEquals("Раз в 45 мин", text(a, R.id.periodicLabel))
+        periodicBar.progress = Heater.PERIODIC_STEPS.indexOf(600)
         timeout.setText("5")
         save.performClick()
         assertFalse(a.isFinishing) // out of range
@@ -287,10 +294,10 @@ class UiTest {
         assertEquals(time + 15_000, nextAlarm())
     }
 
-    /** STATUS every minute while heating: fresh temperatures, Stop stays free */
+    /** STATUS every 5 minutes while heating: fresh temperatures, Stop stays free */
     @Test fun periodicStatus() {
         configure()
-        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).putInt(Heater.PERIODIC_INTERVAL, 60).commit()
+        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).putInt(Heater.PERIODIC_INTERVAL, 300).commit()
         val a = launch()
         power(a).performClick()
         Heater.commandSent(app)
@@ -298,9 +305,9 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
         idle()
         val replied = time
-        assertEquals(replied + 60_000, nextAlarm())
+        assertEquals(replied + 300_000, nextAlarm())
 
-        advance(60_000)
+        advance(300_000)
         assertEquals("STATUS", lastSms())
         assertTrue(Heater.prefs(app).getBoolean(Heater.STATUS_AUTO, false))
         assertTrue(power(a).isEnabled)
@@ -311,12 +318,12 @@ class UiTest {
         assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
 
         // Off 20 minutes before the end: a problem, told even with the app on screen
-        advance(60_000)
+        advance(300_000)
         Heater.onReply(app, reply(on = false, flame = false, coolant = 40))
         idle()
         assertEquals("Пуск", power(a).label)
         assertEquals("Отопитель выключился раньше срока", text(a, R.id.message))
-        assertEquals("Отопитель выключился раньше срока" to "Выключился за 28 мин до конца, ОЖ 40 °C", lastNotification())
+        assertEquals("Отопитель выключился раньше срока" to "Выключился за 20 мин до конца, ОЖ 40 °C", lastNotification())
         assertEquals(0L, Heater.nextWake(app))
     }
 
