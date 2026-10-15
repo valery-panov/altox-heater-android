@@ -25,7 +25,6 @@ class ParseTest {
         assertEquals("9", s.cabin)
         assertEquals("12.9", s.voltage)
         assertEquals(false, s.flame)
-        assertNull(s.errors)
         assertNull(s.minutes)
     }
 
@@ -39,12 +38,11 @@ class ParseTest {
 
     // The WBUS-4/5 manual's spelling
     @Test fun wbus5() {
-        val s = Heater.parse("HEATER ON 30min\r\nVoltage: 12.8V\r\nTemp heater: 50C\r\nTemp sensor: 10C\r\nFlame: no\r\nError code: 0A")!!
+        val s = Heater.parse("HEATER ON 30min\r\nVoltage: 12.8V\r\nTemp heater: 50C\r\nTemp sensor: 10C\r\nFlame: no\r\nError code: none")!!
         assertEquals(true, s.on)
         assertEquals(30L, s.minutes)
         assertEquals("50", s.coolant)
         assertEquals("10", s.cabin)
-        assertEquals("0A", s.errors)
     }
 
     @Test fun notStatus() {

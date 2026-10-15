@@ -8,10 +8,11 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
+import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.util.Calendar
 import java.util.Locale
 
 class MainActivity : Activity() {
@@ -21,7 +22,10 @@ class MainActivity : Activity() {
     private lateinit var minutesLabel: TextView
     private lateinit var minutes: SeekBar
     private lateinit var status: RoundButton
+    private lateinit var statusBlock: View
+    private lateinit var flame: ImageView
     private lateinit var statusInfo: TextView
+    private lateinit var statusTime: TextView
 
     private val prefs by lazy { Heater.prefs(this) }
     private val handler = Handler(Looper.getMainLooper())
@@ -43,7 +47,10 @@ class MainActivity : Activity() {
         minutesLabel = findViewById(R.id.minutesLabel)
         minutes = findViewById(R.id.minutes)
         status = findViewById(R.id.status)
+        statusBlock = findViewById(R.id.statusBlock)
+        flame = findViewById(R.id.flame)
         statusInfo = findViewById(R.id.statusInfo)
+        statusTime = findViewById(R.id.statusTime)
 
         status.label = getString(R.string.status)
         status.labelSize = power.subSize * 1.1f
@@ -63,11 +70,11 @@ class MainActivity : Activity() {
             if (ensureSmsPermissions()) Heater.requestStatus(this)
         }
 
-        minutes.max = (Heater.MAX_MINUTES - Heater.MIN_MINUTES) / STEP
-        minutes.progress = (Heater.minutes(this) - Heater.MIN_MINUTES) / STEP
+        minutes.max = Heater.RUN_MINUTES.size - 1
+        minutes.progress = Heater.RUN_MINUTES.indexOf(Heater.minutes(this))
         minutes.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (fromUser) prefs.edit().putInt(Heater.MINUTES, Heater.MIN_MINUTES + progress * STEP).apply()
+                if (fromUser) prefs.edit().putInt(Heater.MINUTES, Heater.RUN_MINUTES[progress]).apply()
             }
             override fun onStartTrackingTouch(bar: SeekBar) {}
             override fun onStopTrackingTouch(bar: SeekBar) {}
@@ -142,17 +149,18 @@ class MainActivity : Activity() {
         minutesLabel.text = "Время работы: $run мин"
         minutes.isEnabled = configured && state == Heater.OFF && !statusBusy
 
-        val statusTime = prefs.getLong(Heater.STATUS_TIME, 0)
-        statusInfo.text = if (statusTime == 0L) "" else {
+        val time = prefs.getLong(Heater.STATUS_TIME, 0)
+        statusBlock.visibility = if (time == 0L) View.INVISIBLE else View.VISIBLE
+        if (time > 0) {
             fun value(key: String, unit: String) =
                 prefs.getString(key, "").let { if (it.isNullOrEmpty()) "—" else "$it $unit" }
-            val errors = prefs.getString(Heater.ERRORS, "").let { if (it.isNullOrEmpty()) "нет" else it }
-            val flame = if (prefs.getBoolean(Heater.FLAME, false)) "есть" else "нет"
-            val time = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(statusTime))
-            "ОЖ: ${value(Heater.COOLANT, "°C")}    Салон: ${value(Heater.CABIN, "°C")}\n" +
-                "Напряжение: ${value(Heater.VOLTAGE, "В")}\n" +
-                "Пламя: $flame    Ошибки: $errors\n" +
-                "обновлено $time"
+            statusInfo.text = "ОЖ: ${value(Heater.COOLANT, "°C")}\n" +
+                "Салон: ${value(Heater.CABIN, "°C")}\n" +
+                "Напряжение: ${value(Heater.VOLTAGE, "В")}"
+            val burning = prefs.getBoolean(Heater.FLAME, false)
+            flame.setImageResource(if (burning) R.drawable.ic_flame else R.drawable.ic_ember)
+            flame.contentDescription = if (burning) "Пламя есть" else "Пламени нет"
+            statusTime.text = "Обновлено: " + whenText(time)
         }
         renderFrame()
     }
@@ -219,7 +227,23 @@ class MainActivity : Activity() {
         return "%02d:%02d".format(s / 60, s % 60)
     }
 
+    /** "сегодня 19:38:25", "вчера 23:10:05", "14 окт 04:01:00" */
+    private fun whenText(ms: Long): String {
+        val c = Calendar.getInstance().apply { timeInMillis = ms }
+        val today = Calendar.getInstance()
+        val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+        fun sameDay(a: Calendar, b: Calendar) =
+            a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+        val day = when {
+            sameDay(c, today) -> "сегодня"
+            sameDay(c, yesterday) -> "вчера"
+            else -> "${c.get(Calendar.DAY_OF_MONTH)} ${MONTHS[c.get(Calendar.MONTH)]}"
+        }
+        return String.format(Locale.US, "%s %02d:%02d:%02d", day,
+            c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), c.get(Calendar.SECOND))
+    }
+
     companion object {
-        const val STEP = 5
+        private val MONTHS = listOf("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
     }
 }

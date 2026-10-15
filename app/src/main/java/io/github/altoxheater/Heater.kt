@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
+import kotlin.math.abs
 
 /**
  * Heater state and Altox WBUS SMS protocol. Everything lives in SharedPreferences: the receivers
@@ -37,16 +38,16 @@ object Heater {
 
     // The module shows HEATER ON / HEATER OFF right after the command (the flame and the purge
     // come later), so normally the first STATUS confirms it
-    private val START = Timing(15_000, 30_000, 2 * 60_000)
-    private val STOP = Timing(20_000, 30_000, 2 * 60_000)
+    private val START = Timing(6_000, 12_000, 60_000)
+    private val STOP = Timing(8_000, 12_000, 60_000)
 
     /** How long to wait for a reply to STATUS */
     const val REPLY_TIMEOUT = 2 * 60_000L
     /** Some phones never report the SMS as sent: then count it as sent after this */
     private const val SENT_TIMEOUT = 60_000L
 
-    const val MIN_MINUTES = 10
-    const val MAX_MINUTES = 120
+    /** Run times on the slider: fine steps for short runs, coarse for long ones */
+    val RUN_MINUTES = listOf(10, 11, 12, 13, 14, 15, 20, 25, 30, 40, 60, 90, 120)
 
     // Settings
     const val PHONE = "phone"
@@ -77,7 +78,6 @@ object Heater {
     const val CABIN = "cabin"
     const val VOLTAGE = "voltage"
     const val FLAME = "flame"
-    const val ERRORS = "errors"
 
     const val KIND_COMMAND = "command"
     const val KIND_STATUS = "status"
@@ -87,7 +87,11 @@ object Heater {
 
     fun isConfigured(ctx: Context) = !prefs(ctx).getString(PHONE, "").isNullOrBlank()
 
-    fun minutes(ctx: Context) = prefs(ctx).getInt(MINUTES, 30).let { if (it in MIN_MINUTES..MAX_MINUTES) it else 30 }
+    /** The saved run time, snapped to the nearest step */
+    fun minutes(ctx: Context): Int {
+        val saved = prefs(ctx).getInt(MINUTES, 30).takeIf { it > 0 } ?: 30
+        return RUN_MINUTES.minBy { abs(it - saved) }
+    }
 
     fun isPending(state: String?) = state == STARTING || state == STOPPING
 
@@ -229,7 +233,6 @@ object Heater {
     class Status(
         val on: Boolean?, val minutes: Long?,
         val coolant: String?, val cabin: String?, val voltage: String?, val flame: Boolean?,
-        val errors: String?,
     )
 
     private val stateRe = Regex("""^HEATER\s+(ON|OFF)\b(?:\D*(\d+)\s*MIN)?""", RegexOption.IGNORE_CASE)
@@ -250,19 +253,17 @@ object Heater {
             }
             val colon = line.indexOf(':')
             if (colon < 0) continue
-            // "Temp heater" and "Error code" are the WBUS-4/5 spelling
+            // "Temp heater" is the WBUS-4/5 spelling
             val key = line.substring(0, colon).trim().uppercase().removePrefix("TEMP ").trim()
             fields[key] = line.substring(colon + 1).trim()
         }
         fun number(key: String) = fields[key]?.let { numberRe.find(it)?.value?.replace(',', '.') }
-        val errors = fields.entries.firstOrNull { it.key.startsWith("ERR") }?.value
         val status = Status(
             on, minutes,
             coolant = number("HEATER"),
             cabin = number("SENSOR"),
             voltage = number("VOLTAGE"),
             flame = fields["FLAME"]?.let { it.equals("YES", true) },
-            errors = errors,
         )
         val known = on != null || status.coolant != null || status.cabin != null || status.flame != null
         return if (known) status else null
@@ -281,8 +282,6 @@ object Heater {
             .putString(CABIN, s.cabin.orEmpty())
             .putString(VOLTAGE, s.voltage.orEmpty())
             .putBoolean(FLAME, s.flame == true)
-            // No error line, "none" or FF: no errors
-            .putString(ERRORS, s.errors?.takeUnless { it.equals("none", true) || it.equals("FF", true) }.orEmpty())
             .putLong(STATUS_TIME, now)
             .putLong(STATUS_SENT, 0)
         if (s.on == null) {
