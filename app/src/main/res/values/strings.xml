@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Altox Heater</string>
+    <string name="settings">Настройки</string>
+    <string name="status">Статус</string>
+    <string name="phone">Номер Altox (SIM-карта в модуле)</string>
+    <string name="sim">SIM-карта, с которой слать SMS</string>
+    <string name="sim_default">По умолчанию для SMS</string>
+    <string name="password">Пароль модуля (если задан командой PASS)</string>
+    <string name="minutes">Время работы, мин (10–120; пусто — по настройке модуля)</string>
+    <string name="save">Сохранить</string>
+</resources>
