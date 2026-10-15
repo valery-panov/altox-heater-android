@@ -63,7 +63,8 @@ class UiTest {
         configure()
         val a = launch()
         assertEquals("Пуск", power(a).label)
-        assertEquals("30 мин", power(a).sub)
+        assertEquals("", power(a).sub)
+        assertEquals("Время работы: 30 мин", text(a, R.id.minutesLabel))
         shot(a, "02-idle")
 
         power(a).performClick()
@@ -88,7 +89,12 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = true, coolant = 41))
         advance(192_500 - 6_500) // 3 min 12.5 s since START left
         assertEquals("Стоп", power(a).label)
-        assertEquals("26 мин : 47.5 сек", power(a).sub)
+        assertEquals("", power(a).sub)
+        assertEquals("Осталось 26 мин : 47.5 сек", text(a, R.id.minutesLabel))
+        // 26.8 min sits between the 25 and 30 steps of the scale
+        val bar = a.findViewById<SeekBar>(R.id.minutes)
+        val i25 = Heater.RUN_MINUTES.indexOf(25) * MainActivity.STEP
+        assertTrue("${bar.progress}", bar.progress in i25 + 30..i25 + 40)
         assertTrue(power(a).isEnabled)
         shot(a, "06-on")
 
@@ -124,9 +130,12 @@ class UiTest {
         idle()
         assertTrue(power(a).isEnabled)
         assertTrue(status(a).isEnabled)
-        val updated = a.findViewById<android.widget.TextView>(R.id.statusTime).text.toString()
-        assertTrue(updated, updated.matches(Regex("Обновлено: сегодня \\d\\d:\\d\\d:\\d\\d")))
+        assertEquals("Обновлено: только что", text(a, R.id.statusTime))
+        advance(23 * 60_000 + 21_000)
+        assertEquals("Обновлено: 23 минуты 21 секунду назад", text(a, R.id.statusTime))
         shot(a, "10-status")
+        advance(37 * 60_000)
+        assertTrue(text(a, R.id.statusTime).matches(Regex("Обновлено: (сегодня|вчера) \\d\\d:\\d\\d:\\d\\d")))
     }
 
     @Test fun startNotConfirmed() {
@@ -156,7 +165,7 @@ class UiTest {
         power(a).performClick()
         Heater.commandSent(app)
         advance(7_000)
-        advance(Heater.REPLY_TIMEOUT + 1_000)
+        advance(Heater.replyTimeout(app) + 1_000)
         assertEquals("Пуск", power(a).label)
         assertEquals("Нет ответа от Altox", a.findViewById<android.widget.TextView>(R.id.message).text)
     }
@@ -173,8 +182,9 @@ class UiTest {
         configure()
         val a = launch()
         val bar = a.findViewById<SeekBar>(R.id.minutes)
-        assertEquals(Heater.RUN_MINUTES.size - 1, bar.max)
-        shadowOf(bar).onSeekBarChangeListener.onProgressChanged(bar, Heater.RUN_MINUTES.indexOf(90), true)
+        assertEquals((Heater.RUN_MINUTES.size - 1) * MainActivity.STEP, bar.max)
+        // A drag ends near a step: it snaps to it
+        shadowOf(bar).onSeekBarChangeListener.onProgressChanged(bar, Heater.RUN_MINUTES.indexOf(90) * MainActivity.STEP + 20, true)
         idle()
         assertEquals("Время работы: 90 мин", a.findViewById<android.widget.TextView>(R.id.minutesLabel).text)
         power(a).performClick()
@@ -202,7 +212,7 @@ class UiTest {
         time = nextAlarm()
         PollReceiver().onReceive(app, Intent())
         assertEquals("STATUS", lastSms())
-        assertEquals(time + Heater.REPLY_TIMEOUT + 1, nextAlarm())
+        assertEquals(time + Heater.replyTimeout(app) + 1, nextAlarm())
 
         time += 5_000
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
@@ -253,14 +263,32 @@ class UiTest {
         a.findViewById<android.widget.EditText>(R.id.phone).setText("+79001112233")
         assertTrue(save.isEnabled)
         shot(a, "12-settings-changed")
+        val timeout = a.findViewById<android.widget.EditText>(R.id.replyTimeout)
+        assertEquals("120", timeout.text.toString())
+        timeout.setText("5")
+        save.performClick()
+        assertFalse(a.isFinishing) // out of range
+        timeout.setText("45")
         save.performClick()
         assertEquals("+79001112233", Heater.prefs(app).getString(Heater.PHONE, ""))
+        assertEquals(45_000L, Heater.replyTimeout(app))
         assertTrue(a.isFinishing)
+    }
+
+    @Test fun settingsBack() {
+        configure()
+        val a = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
+        a.findViewById<android.widget.EditText>(R.id.phone).setText("+79001112233")
+        a.findViewById<android.widget.ImageButton>(R.id.back).performClick()
+        assertTrue(a.isFinishing)
+        assertEquals(PHONE, Heater.prefs(app).getString(Heater.PHONE, ""))
     }
 
     private fun configure() = Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).commit()
 
     private fun launch(): MainActivity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+
+    private fun text(a: Activity, id: Int) = a.findViewById<android.widget.TextView>(id).text.toString()
 
     private fun power(a: Activity) = a.findViewById<RoundButton>(R.id.power)
     private fun status(a: Activity) = a.findViewById<RoundButton>(R.id.status)

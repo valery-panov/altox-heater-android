@@ -44,19 +44,21 @@ object Heater {
     private val START = Timing(6_000, 12_000, 60_000)
     private val STOP = Timing(8_000, 12_000, 60_000)
 
-    /** How long to wait for a reply to STATUS */
-    const val REPLY_TIMEOUT = 2 * 60_000L
+    /** How long to wait for a reply to STATUS, seconds: the setting's default and range */
+    const val REPLY_TIMEOUT_DEFAULT = 120
+    val REPLY_TIMEOUT_RANGE = 10..900
     /** Some phones never report the SMS as sent: then count it as sent after this */
     private const val SENT_TIMEOUT = 60_000L
 
     /** Run times on the slider: fine steps for short runs, coarse for long ones */
-    val RUN_MINUTES = listOf(10, 11, 12, 13, 14, 15, 20, 25, 30, 40, 60, 90, 120)
+    val RUN_MINUTES = listOf(10, 11, 12, 13, 14, 15, 17, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 105, 120)
 
     // Settings
     const val PHONE = "phone"
     const val SIM_SLOT = "simSlot" // -1: the phone's default SIM for SMS
     const val PASSWORD = "password" // written before each command, if PASS is set on the module
     const val MINUTES = "minutes" // run time for START, the slider on the main screen
+    const val REPLY_TIMEOUT = "replyTimeout" // seconds, see replyTimeout()
 
     // Command in progress
     const val STATE = "state"
@@ -99,6 +101,10 @@ object Heater {
         val saved = prefs(ctx).getInt(MINUTES, 30).takeIf { it > 0 } ?: 30
         return RUN_MINUTES.minBy { abs(it - saved) }
     }
+
+    /** How long to wait for a reply to STATUS, ms */
+    fun replyTimeout(ctx: Context) =
+        prefs(ctx).getInt(REPLY_TIMEOUT, REPLY_TIMEOUT_DEFAULT).coerceIn(REPLY_TIMEOUT_RANGE) * 1000L
 
     fun isPending(state: String?) = state == STARTING || state == STOPPING
 
@@ -175,7 +181,7 @@ object Heater {
             p.getLong(PENDING_SINCE, 0).takeIf { isPending(state) && p.getLong(CMD_SENT_AT, 0) == 0L }
                 ?.let { it + SENT_TIMEOUT + 1 },
             p.getLong(POLL_AT, 0).takeIf { isPending(state) && it > 0 },
-            statusSent.takeIf { it > 0 }?.let { it + REPLY_TIMEOUT + 1 },
+            statusSent.takeIf { it > 0 }?.let { it + replyTimeout(ctx) + 1 },
             p.getLong(ENDS_AT, 0).takeIf { state == ON && it > 0 },
         ).minOrNull() ?: 0
     }
@@ -237,12 +243,12 @@ object Heater {
                     if (!send(ctx, "STATUS", KIND_STATUS)) commandFailed(ctx, "Не удалось отправить SMS")
                     else scheduleWake(ctx)
                 }
-                statusSent > 0 && now - statusSent > REPLY_TIMEOUT -> commandFailed(ctx, "Нет ответа от Altox")
+                statusSent > 0 && now - statusSent > replyTimeout(ctx) -> commandFailed(ctx, "Нет ответа от Altox")
             }
             return
         }
         val statusSent = p.getLong(STATUS_SENT, 0)
-        if (statusSent > 0 && now - statusSent > REPLY_TIMEOUT) statusFailed(ctx, "Нет ответа на запрос статуса")
+        if (statusSent > 0 && now - statusSent > replyTimeout(ctx)) statusFailed(ctx, "Нет ответа на запрос статуса")
         val endsAt = p.getLong(ENDS_AT, 0)
         if (state == ON && endsAt in 1..now) {
             p.edit().putString(STATE, OFF).commit()

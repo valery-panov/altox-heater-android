@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -29,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var statusTime: TextView
 
     private val prefs by lazy { Heater.prefs(this) }
+    private var sliderEditable = false
     private val handler = Handler(Looper.getMainLooper())
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> render() }
     private val frame = object : Runnable {
@@ -71,15 +73,19 @@ class MainActivity : Activity() {
             if (ensureSmsPermissions()) Heater.requestStatus(this)
         }
 
-        minutes.max = Heater.RUN_MINUTES.size - 1
-        minutes.progress = Heater.RUN_MINUTES.indexOf(Heater.minutes(this))
+        // While heating the slider shows the time left, so it moves smoothly between the steps
+        minutes.max = (Heater.RUN_MINUTES.size - 1) * STEP
         minutes.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (fromUser) prefs.edit().putInt(Heater.MINUTES, Heater.RUN_MINUTES[progress]).apply()
+                if (fromUser) prefs.edit().putInt(Heater.MINUTES, Heater.RUN_MINUTES[(progress + STEP / 2) / STEP]).apply()
             }
             override fun onStartTrackingTouch(bar: SeekBar) {}
-            override fun onStopTrackingTouch(bar: SeekBar) {}
+            override fun onStopTrackingTouch(bar: SeekBar) {
+                bar.progress = position(Heater.minutes(this@MainActivity).toDouble())
+            }
         })
+        // Looks active all the time (it shows the time left), but takes touches only when idle
+        minutes.setOnTouchListener { _, _ -> !sliderEditable }
 
         // Notifications only on start: they are not needed to send commands
         val wanted = listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS) +
@@ -152,9 +158,15 @@ class MainActivity : Activity() {
         }
         message.text = prefs.getString(Heater.MESSAGE, "")
 
-        val run = Heater.minutes(this)
-        minutesLabel.text = "Время работы: $run мин"
-        minutes.isEnabled = configured && state == Heater.OFF && !statusBusy
+        sliderEditable = configured && state == Heater.OFF && !statusBusy
+        minutes.isEnabled = configured
+        val tint = ColorStateList.valueOf(getColor(if (state == Heater.ON) R.color.btn_on else R.color.accent))
+        minutes.progressTintList = tint
+        minutes.thumbTintList = tint
+        if (state != Heater.ON) {
+            minutesLabel.text = "Время работы: ${Heater.minutes(this)} мин"
+            minutes.progress = position(Heater.minutes(this).toDouble())
+        }
 
         val time = prefs.getLong(Heater.STATUS_TIME, 0)
         statusBlock.visibility = if (time == 0L) View.INVISIBLE else View.VISIBLE
@@ -165,9 +177,8 @@ class MainActivity : Activity() {
                 "${value(Heater.CABIN, "°C")}\n" +
                 value(Heater.VOLTAGE, "В")
             val burning = prefs.getBoolean(Heater.FLAME, false)
-            flame.setImageResource(if (burning) R.drawable.ic_flame else R.drawable.ic_ember)
+            flame.setImageResource(if (burning) R.drawable.ic_flame else R.drawable.ic_flame_off)
             flame.contentDescription = if (burning) "Пламя есть" else "Пламени нет"
-            statusTime.text = "Обновлено: " + whenText(time)
         }
         renderFrame()
     }
@@ -195,23 +206,30 @@ class MainActivity : Activity() {
             }
             Heater.ON -> {
                 power.spinning = false
+                power.sub = ""
                 val endsAt = prefs.getLong(Heater.ENDS_AT, 0)
                 val total = prefs.getLong(Heater.RUN_TOTAL, 0)
                 if (endsAt > 0 && total > 0) {
                     val left = maxOf(endsAt - now, 0)
                     power.progress = left.toFloat() / total
-                    power.sub = String.format(Locale.US, "%02d мин : %04.1f сек", left / 60_000, left % 60_000 / 1000.0)
+                    minutesLabel.text = String.format(Locale.US, "Осталось %02d мин : %04.1f сек",
+                        left / 60_000, left % 60_000 / 1000.0)
+                    minutes.progress = position(left / 60_000.0)
                 } else {
+                    // Started elsewhere, the run time is unknown
                     power.progress = -1f
-                    power.sub = "работает\n" + clock(now - prefs.getLong(Heater.ON_SINCE, now))
+                    minutesLabel.text = "Работает " + clock(now - prefs.getLong(Heater.ON_SINCE, now))
                 }
             }
             else -> {
                 power.spinning = false
                 power.progress = -1f
-                power.sub = if (Heater.isConfigured(this)) "${Heater.minutes(this)} мин" else ""
+                power.sub = ""
             }
         }
+
+        val time = prefs.getLong(Heater.STATUS_TIME, 0)
+        if (time > 0) statusTime.text = "Обновлено: " + whenText(time, now)
 
         if (!Heater.isPending(state) && statusSent > 0) spin(status, "${(now - statusSent) / 1000} с")
         else {
@@ -234,11 +252,33 @@ class MainActivity : Activity() {
         return "%02d:%02d".format(s / 60, s % 60)
     }
 
-    /** "сегодня 19:38:25", "вчера 23:10:05", "14 окт 04:01:00" */
-    private fun whenText(ms: Long): String {
+    /** Slider position for a run time in minutes, between the steps of the scale */
+    private fun position(minutes: Double): Int {
+        val steps = Heater.RUN_MINUTES
+        if (minutes <= steps.first()) return 0
+        val i = steps.indexOfLast { it <= minutes }
+        if (i == steps.size - 1) return i * STEP
+        val part = (minutes - steps[i]) / (steps[i + 1] - steps[i])
+        return ((i + part) * STEP).toInt()
+    }
+
+    /** "только что", "15 секунд назад", "23 минуты 21 секунду назад" within an hour, then
+     * "сегодня 19:38:25", "вчера 23:10:05", "14 окт 04:01:00" */
+    private fun whenText(ms: Long, now: Long): String {
+        val ago = (now - ms) / 1000
+        if (ago in 0 until 3600) {
+            val m = ago / 60
+            val s = ago % 60
+            return when {
+                ago == 0L -> "только что"
+                m == 0L -> "$s ${plural(s, "секунду", "секунды", "секунд")} назад"
+                s == 0L -> "$m ${plural(m, "минуту", "минуты", "минут")} назад"
+                else -> "$m ${plural(m, "минуту", "минуты", "минут")} $s ${plural(s, "секунду", "секунды", "секунд")} назад"
+            }
+        }
         val c = Calendar.getInstance().apply { timeInMillis = ms }
-        val today = Calendar.getInstance()
-        val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+        val today = Calendar.getInstance().apply { timeInMillis = now }
+        val yesterday = Calendar.getInstance().apply { timeInMillis = now; add(Calendar.DAY_OF_YEAR, -1) }
         fun sameDay(a: Calendar, b: Calendar) =
             a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
         val day = when {
@@ -250,7 +290,16 @@ class MainActivity : Activity() {
             c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), c.get(Calendar.SECOND))
     }
 
+    private fun plural(n: Long, one: String, few: String, many: String) = when {
+        n % 100 in 11..14 -> many
+        n % 10 == 1L -> one
+        n % 10 in 2..4 -> few
+        else -> many
+    }
+
     companion object {
+        /** Slider units per step of the scale */
+        const val STEP = 100
         private val MONTHS = listOf("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
     }
 }

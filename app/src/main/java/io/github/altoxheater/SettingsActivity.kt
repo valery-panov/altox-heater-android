@@ -9,6 +9,7 @@ import android.text.TextWatcher
 import android.telephony.SubscriptionManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.RadioButton
 import android.widget.RadioGroup
 
@@ -16,6 +17,7 @@ class SettingsActivity : Activity() {
     private lateinit var phone: EditText
     private lateinit var sim: RadioGroup
     private lateinit var password: EditText
+    private lateinit var replyTimeout: EditText
     private lateinit var saveButton: Button
 
     private val prefs by lazy { Heater.prefs(this) }
@@ -26,9 +28,12 @@ class SettingsActivity : Activity() {
         phone = findViewById(R.id.phone)
         sim = findViewById(R.id.sim)
         password = findViewById(R.id.password)
+        replyTimeout = findViewById(R.id.replyTimeout)
 
         phone.setText(prefs.getString(Heater.PHONE, ""))
         password.setText(prefs.getString(Heater.PASSWORD, ""))
+        replyTimeout.setText(savedTimeout().toString())
+        findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
         saveButton = findViewById(R.id.save)
         saveButton.setOnClickListener { save() }
 
@@ -44,6 +49,7 @@ class SettingsActivity : Activity() {
         }
         phone.addTextChangedListener(watcher)
         password.addTextChangedListener(watcher)
+        replyTimeout.addTextChangedListener(watcher)
         sim.setOnCheckedChangeListener { _, _ -> updateSave() }
         updateSave()
     }
@@ -51,8 +57,11 @@ class SettingsActivity : Activity() {
     private fun updateSave() {
         saveButton.isEnabled = phone.text.toString().trim() != prefs.getString(Heater.PHONE, "") ||
             password.text.toString().trim() != prefs.getString(Heater.PASSWORD, "") ||
-            sim.checkedRadioButtonId - ID_BASE != prefs.getInt(Heater.SIM_SLOT, -1)
+            sim.checkedRadioButtonId - ID_BASE != prefs.getInt(Heater.SIM_SLOT, -1) ||
+            replyTimeout.text.toString().trim() != savedTimeout().toString()
     }
+
+    private fun savedTimeout() = (Heater.replyTimeout(this) / 1000).toInt()
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         fillSims()
@@ -83,7 +92,13 @@ class SettingsActivity : Activity() {
             phone.error = "Введите номер полностью, например +79001234567"
             return
         }
+        val timeout = replyTimeout.text.toString().trim().toIntOrNull()
+        if (timeout == null || timeout !in Heater.REPLY_TIMEOUT_RANGE) {
+            replyTimeout.error = "От ${Heater.REPLY_TIMEOUT_RANGE.first} до ${Heater.REPLY_TIMEOUT_RANGE.last} секунд"
+            return
+        }
         prefs.edit()
+            .putInt(Heater.REPLY_TIMEOUT, timeout)
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)
             .putString(Heater.PASSWORD, password.text.toString().trim())

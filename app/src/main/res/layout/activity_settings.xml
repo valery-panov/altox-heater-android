@@ -10,13 +10,31 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="16dp"
-            android:text="@string/settings"
-            android:textColor="@color/text"
-            android:textSize="24sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- Leaves without saving -->
+            <ImageButton
+                android:id="@+id/back"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="-12dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/back"
+                android:src="@drawable/ic_back" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="@string/settings"
+                android:textColor="@color/text"
+                android:textSize="24sp" />
+        </LinearLayout>
 
         <TextView style="@style/Label" android:text="@string/phone" />
 
@@ -42,6 +60,15 @@
             android:layout_height="wrap_content"
             android:inputType="text" />
 
+
+        <TextView style="@style/Label" android:text="@string/reply_timeout" />
+
+        <EditText
+            android:id="@+id/replyTimeout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:maxLength="3" />
 
         <Button
             android:id="@+id/save"
