@@ -106,7 +106,9 @@ class UiTest {
         assertEquals("Пуск", power(a).label)
         assertEquals("Нагрев выключен", a.findViewById<android.widget.TextView>(R.id.caption).text)
         shot(a, "08-off")
+
     }
+
 
     @Test fun statusRequest() {
         configure()
@@ -243,8 +245,17 @@ class UiTest {
     }
 
     @Test fun settings() {
+        configure()
         val a = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
+        val save = a.findViewById<android.widget.Button>(R.id.save)
+        assertFalse(save.isEnabled)
         shot(a, "12-settings")
+        a.findViewById<android.widget.EditText>(R.id.phone).setText("+79001112233")
+        assertTrue(save.isEnabled)
+        shot(a, "12-settings-changed")
+        save.performClick()
+        assertEquals("+79001112233", Heater.prefs(app).getString(Heater.PHONE, ""))
+        assertTrue(a.isFinishing)
     }
 
     private fun configure() = Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).commit()

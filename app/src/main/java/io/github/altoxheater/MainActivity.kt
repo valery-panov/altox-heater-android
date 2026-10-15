@@ -161,9 +161,9 @@ class MainActivity : Activity() {
         if (time > 0) {
             fun value(key: String, unit: String) =
                 prefs.getString(key, "").let { if (it.isNullOrEmpty()) "—" else "$it $unit" }
-            statusInfo.text = "ОЖ: ${value(Heater.COOLANT, "°C")}\n" +
-                "Салон: ${value(Heater.CABIN, "°C")}\n" +
-                "Напряжение: ${value(Heater.VOLTAGE, "В")}"
+            statusInfo.text = "${value(Heater.COOLANT, "°C")}\n" +
+                "${value(Heater.CABIN, "°C")}\n" +
+                value(Heater.VOLTAGE, "В")
             val burning = prefs.getBoolean(Heater.FLAME, false)
             flame.setImageResource(if (burning) R.drawable.ic_flame else R.drawable.ic_ember)
             flame.contentDescription = if (burning) "Пламя есть" else "Пламени нет"

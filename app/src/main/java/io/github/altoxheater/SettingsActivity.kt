@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.telephony.SubscriptionManager
 import android.widget.Button
 import android.widget.EditText
@@ -14,6 +16,7 @@ class SettingsActivity : Activity() {
     private lateinit var phone: EditText
     private lateinit var sim: RadioGroup
     private lateinit var password: EditText
+    private lateinit var saveButton: Button
 
     private val prefs by lazy { Heater.prefs(this) }
 
@@ -26,11 +29,29 @@ class SettingsActivity : Activity() {
 
         phone.setText(prefs.getString(Heater.PHONE, ""))
         password.setText(prefs.getString(Heater.PASSWORD, ""))
-        findViewById<Button>(R.id.save).setOnClickListener { save() }
+        saveButton = findViewById(R.id.save)
+        saveButton.setOnClickListener { save() }
 
         fillSims()
         if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), 1)
+
+        // Save is active only when something differs from what is saved
+        val watcher = object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) = updateSave()
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        }
+        phone.addTextChangedListener(watcher)
+        password.addTextChangedListener(watcher)
+        sim.setOnCheckedChangeListener { _, _ -> updateSave() }
+        updateSave()
+    }
+
+    private fun updateSave() {
+        saveButton.isEnabled = phone.text.toString().trim() != prefs.getString(Heater.PHONE, "") ||
+            password.text.toString().trim() != prefs.getString(Heater.PASSWORD, "") ||
+            sim.checkedRadioButtonId - ID_BASE != prefs.getInt(Heater.SIM_SLOT, -1)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {

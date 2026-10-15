@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded blue button; pale while disabled (nothing to save) -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <shape><solid android:color="#B7CDE6" /><corners android:radius="24dp" /></shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape><solid android:color="#155FA8" /><corners android:radius="24dp" /></shape>
+    </item>
+    <item>
+        <shape><solid android:color="@color/accent" /><corners android:radius="24dp" /></shape>
+    </item>
+</selector>
