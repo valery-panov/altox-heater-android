@@ -5,10 +5,12 @@
     <color name="text_secondary">#757575</color>
     <color name="accent">#1976D2</color>
     <color name="error">#C62828</color>
-    <!-- The big button by state -->
-    <color name="btn_off">#1976D2</color>
-    <color name="btn_pending">#F9A825</color>
-    <color name="btn_on">#E64A19</color>
-    <color name="btn_disabled">#BDBDBD</color>
-    <color name="btn_ring">#9E9E9E</color>
+    <!-- Round buttons -->
+    <color name="btn_off">#2FA37A</color>
+    <color name="btn_pending">#E8932F</color>
+    <color name="btn_on">#E0574B</color>
+    <color name="btn_status">#5B7A99</color>
+    <color name="btn_disabled">#C3C8CE</color>
+    <color name="btn_ring">#9AA0A6</color>
+    <color name="btn_progress">#1E3A8A</color>
 </resources>

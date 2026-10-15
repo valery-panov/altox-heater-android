@@ -7,6 +7,5 @@
     <string name="sim">SIM-карта, с которой слать SMS</string>
     <string name="sim_default">По умолчанию для SMS</string>
     <string name="password">Пароль модуля (если задан командой PASS)</string>
-    <string name="minutes">Время работы, мин (10–120; пусто — по настройке модуля)</string>
     <string name="save">Сохранить</string>
 </resources>

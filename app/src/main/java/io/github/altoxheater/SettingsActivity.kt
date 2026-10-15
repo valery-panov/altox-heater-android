@@ -14,7 +14,6 @@ class SettingsActivity : Activity() {
     private lateinit var phone: EditText
     private lateinit var sim: RadioGroup
     private lateinit var password: EditText
-    private lateinit var minutes: EditText
 
     private val prefs by lazy { Heater.prefs(this) }
 
@@ -24,11 +23,9 @@ class SettingsActivity : Activity() {
         phone = findViewById(R.id.phone)
         sim = findViewById(R.id.sim)
         password = findViewById(R.id.password)
-        minutes = findViewById(R.id.minutes)
 
         phone.setText(prefs.getString(Heater.PHONE, ""))
         password.setText(prefs.getString(Heater.PASSWORD, ""))
-        prefs.getInt(Heater.MINUTES, 0).let { if (it > 0) minutes.setText(it.toString()) }
         findViewById<Button>(R.id.save).setOnClickListener { save() }
 
         fillSims()
@@ -65,17 +62,10 @@ class SettingsActivity : Activity() {
             phone.error = "Введите номер полностью, например +79001234567"
             return
         }
-        val text = minutes.text.toString().trim()
-        val min = text.toIntOrNull() ?: 0
-        if (text.isNotEmpty() && min !in 10..120) {
-            minutes.error = "От 10 до 120 минут"
-            return
-        }
         prefs.edit()
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)
             .putString(Heater.PASSWORD, password.text.toString().trim())
-            .putInt(Heater.MINUTES, min)
             .apply()
         finish()
     }

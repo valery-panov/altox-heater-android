@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the signed release APK into dist/altox-heater.apk.
+# Builds the signed release APK into dist/altox-heater-<versionName>.apk.
 # Needs JDK 17, Android SDK (platforms;android-36, build-tools;36.1.0) and Gradle 8.14: either on
 # PATH / in ANDROID_HOME, or in ANDROID_BUILD (default ~/android-build: jdk/, sdk/, gradle/).
 # Signing key: ANDROID_KEYSTORE (default release.jks here), its password ANDROID_KEYSTORE_PASSWORD
@@ -18,7 +18,9 @@ export ANDROID_KEYSTORE=${ANDROID_KEYSTORE:-$PWD/release.jks}
 [[ -f "$ANDROID_KEYSTORE" && -n "${ANDROID_KEYSTORE_PASSWORD:-}" ]] \
   || { echo "no signing key: $ANDROID_KEYSTORE and ANDROID_KEYSTORE_PASSWORD in secrets.env" >&2; exit 1; }
 
+VERSION=$(sed -n 's/^ *versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
 gradle -q --console=plain assembleRelease
 mkdir -p dist
-cp app/build/outputs/apk/release/app-release.apk dist/altox-heater.apk
-echo "dist/altox-heater.apk: $(du -h dist/altox-heater.apk | cut -f1)"
+APK=dist/altox-heater-$VERSION.apk
+cp app/build/outputs/apk/release/app-release.apk "$APK"
+echo "$APK: $(du -h "$APK" | cut -f1)"

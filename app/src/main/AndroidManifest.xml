@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <!-- List of SIM cards for choosing the sending slot -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- STATUS after a command on time while the app is closed; without it a bit later -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:allowBackup="true"
@@ -39,6 +41,11 @@
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
+
+        <!-- Sends the planned STATUS after a command -->
+        <receiver
+            android:name=".PollReceiver"
+            android:exported="false" />
 
         <!-- Result of sending our own SMS -->
         <receiver

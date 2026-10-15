@@ -1,6 +1,7 @@
 package io.github.altoxheater
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -11,14 +12,19 @@ import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 
 /**
- * Heater state and Altox WBUS SMS protocol. Everything lives in SharedPreferences: the SMS
- * receivers write it, MainActivity listens for changes and redraws.
+ * Heater state and Altox WBUS SMS protocol. Everything lives in SharedPreferences: the receivers
+ * write it, MainActivity listens for changes and redraws.
  *
- * Commands: START (or START:XX, XX = 10..120 min), STOP, STATUS. The status reply looks like
- *   HEATER ON 30min / GSM (0-31): 28 / Voltage: 12.8V / Temp heater: 50C / Temp sensor: 10C /
- *   Flame: no / Output: off / Error code: none
- * With SMSW1 set on the module, the same status comes after START and STOP, which is the
- * confirmation we wait for.
+ * Commands: START:XX (XX = 10..120 min), STOP, STATUS. The module does not confirm START and
+ * STOP, so after a command we send STATUS until it shows the state we want or time runs out.
+ * The status reply:
+ *   HEATER OFF          (HEATER ON while running)
+ *   GSM (0-31): 28
+ *   VOLTAGE: 12.9V
+ *   HEATER: 7C          coolant
+ *   SENSOR: 9C          cabin
+ *   FLAME: NO
+ *   OUTPUT: OFF         the module's OUT, usually an LED in the car
  */
 object Heater {
     const val OFF = "OFF"
@@ -26,39 +32,66 @@ object Heater {
     const val ON = "ON"
     const val STOPPING = "STOPPING"
 
-    /** How long to wait for a reply before giving up */
-    const val TIMEOUT_MS = 3 * 60_000L
+    /** When to ask STATUS after a command (counted from sending it), how often to repeat, when to give up */
+    private class Timing(val firstPoll: Long, val pollEvery: Long, val timeout: Long)
+
+    // The module shows HEATER ON / HEATER OFF right after the command (the flame and the purge
+    // come later), so normally the first STATUS confirms it
+    private val START = Timing(15_000, 30_000, 2 * 60_000)
+    private val STOP = Timing(20_000, 30_000, 2 * 60_000)
+
+    /** How long to wait for a reply to STATUS */
+    const val REPLY_TIMEOUT = 2 * 60_000L
+    /** Some phones never report the SMS as sent: then count it as sent after this */
+    private const val SENT_TIMEOUT = 60_000L
+
+    const val MIN_MINUTES = 10
+    const val MAX_MINUTES = 120
 
     // Settings
     const val PHONE = "phone"
     const val SIM_SLOT = "simSlot" // -1: the phone's default SIM for SMS
     const val PASSWORD = "password" // written before each command, if PASS is set on the module
-    const val MINUTES = "minutes" // 0: the module's TIME1
+    const val MINUTES = "minutes" // run time for START, the slider on the main screen
 
-    // State
+    // Command in progress
     const val STATE = "state"
     const val PREV_STATE = "prevState" // to roll back when a command fails
     const val PENDING_SINCE = "pendingSince"
+    const val CMD_SENT_AT = "cmdSentAt" // 0 while the SMS is being sent
+    const val DEADLINE = "deadline"
+    const val POLL_AT = "pollAt" // 0: no STATUS planned
+    const val POLL_FROM = "pollFrom" // when it was planned, for the progress ring
+
+    // Run
     const val ON_SINCE = "onSince"
     const val ENDS_AT = "endsAt" // 0 if unknown
+    const val RUN_TOTAL = "runTotal"
+
     const val MESSAGE = "message" // the last error, shown until the next command
 
     // Status
-    const val STATUS_SENT = "statusSent" // 0 if no request is pending
+    const val STATUS_SENT = "statusSent" // 0 if no STATUS is waiting for a reply
     const val STATUS_TIME = "statusTime"
     const val COOLANT = "coolant"
     const val CABIN = "cabin"
+    const val VOLTAGE = "voltage"
+    const val FLAME = "flame"
     const val ERRORS = "errors"
+
+    const val KIND_COMMAND = "command"
+    const val KIND_STATUS = "status"
 
     fun prefs(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences("heater", Context.MODE_PRIVATE)
 
     fun isConfigured(ctx: Context) = !prefs(ctx).getString(PHONE, "").isNullOrBlank()
 
-    fun start(ctx: Context) {
-        val minutes = prefs(ctx).getInt(MINUTES, 0)
-        command(ctx, if (minutes > 0) "START:$minutes" else "START", STARTING)
-    }
+    fun minutes(ctx: Context) = prefs(ctx).getInt(MINUTES, 30).let { if (it in MIN_MINUTES..MAX_MINUTES) it else 30 }
+
+    fun isPending(state: String?) = state == STARTING || state == STOPPING
+
+    fun start(ctx: Context) = command(ctx, "START:${minutes(ctx)}", STARTING)
 
     fun stop(ctx: Context) = command(ctx, "STOP", STOPPING)
 
@@ -73,37 +106,80 @@ object Heater {
             .putString(PREV_STATE, p.getString(STATE, OFF))
             .putString(STATE, pending)
             .putLong(PENDING_SINCE, now())
+            .putLong(CMD_SENT_AT, 0)
+            .putLong(POLL_AT, 0)
+            .putLong(STATUS_SENT, 0)
             .remove(MESSAGE)
             .apply()
         if (!send(ctx, cmd, KIND_COMMAND)) commandFailed(ctx, "Не удалось отправить SMS")
     }
 
-    fun commandFailed(ctx: Context, message: String) {
+    /** The command SMS has left: plan the first STATUS */
+    fun commandSent(ctx: Context, at: Long = now()) {
         val p = prefs(ctx)
         val state = p.getString(STATE, OFF)
-        if (state != STARTING && state != STOPPING) return
-        p.edit().putString(STATE, p.getString(PREV_STATE, OFF)).putString(MESSAGE, message).apply()
+        if (!isPending(state) || p.getLong(CMD_SENT_AT, 0) > 0) return
+        val t = timing(state)
+        p.edit().putLong(CMD_SENT_AT, at).putLong(DEADLINE, at + t.timeout).apply()
+        planPoll(ctx, at + t.firstPoll)
+    }
+
+    fun commandFailed(ctx: Context, message: String) {
+        val p = prefs(ctx)
+        if (!isPending(p.getString(STATE, OFF))) return
+        p.edit()
+            .putString(STATE, p.getString(PREV_STATE, OFF))
+            .putLong(POLL_AT, 0)
+            .putLong(STATUS_SENT, 0)
+            .putString(MESSAGE, message)
+            .apply()
     }
 
     fun statusFailed(ctx: Context, message: String) {
-        prefs(ctx).edit().putLong(STATUS_SENT, 0).putString(MESSAGE, message).apply()
+        val p = prefs(ctx)
+        if (isPending(p.getString(STATE, OFF))) commandFailed(ctx, message)
+        else p.edit().putLong(STATUS_SENT, 0).putString(MESSAGE, message).apply()
     }
 
-    /** Gives up on commands and status requests left without a reply, ends an expired run */
-    fun checkTimeouts(ctx: Context) {
+    private fun timing(state: String?) = if (state == STARTING) START else STOP
+
+    private fun planPoll(ctx: Context, at: Long) {
+        prefs(ctx).edit().putLong(POLL_AT, at).putLong(POLL_FROM, now()).apply()
+        // Wakes us up if the app is closed; while it is open, MainActivity calls tick() itself
+        val am = ctx.getSystemService(AlarmManager::class.java)
+        val pi = PendingIntent.getBroadcast(
+            ctx, 0, Intent(ctx, PollReceiver::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        if (Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms())
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+    }
+
+    /** Sends a planned STATUS, gives up on what got no reply, ends an expired run */
+    fun tick(ctx: Context) {
         val p = prefs(ctx)
         val now = now()
         val state = p.getString(STATE, OFF)
-        if ((state == STARTING || state == STOPPING) && now - p.getLong(PENDING_SINCE, 0) > TIMEOUT_MS)
-            commandFailed(ctx, "Нет ответа от Altox")
+        if (isPending(state)) {
+            val pendingSince = p.getLong(PENDING_SINCE, now)
+            val pollAt = p.getLong(POLL_AT, 0)
+            val statusSent = p.getLong(STATUS_SENT, 0)
+            when {
+                p.getLong(CMD_SENT_AT, 0) == 0L && now - pendingSince > SENT_TIMEOUT -> commandSent(ctx, pendingSince)
+                pollAt in 1..now -> {
+                    p.edit().putLong(POLL_AT, 0).putLong(STATUS_SENT, now).apply()
+                    if (!send(ctx, "STATUS", KIND_STATUS)) commandFailed(ctx, "Не удалось отправить SMS")
+                }
+                statusSent > 0 && now - statusSent > REPLY_TIMEOUT -> commandFailed(ctx, "Нет ответа от Altox")
+            }
+            return
+        }
         val statusSent = p.getLong(STATUS_SENT, 0)
-        if (statusSent > 0 && now - statusSent > TIMEOUT_MS) statusFailed(ctx, "Нет ответа на запрос статуса")
+        if (statusSent > 0 && now - statusSent > REPLY_TIMEOUT) statusFailed(ctx, "Нет ответа на запрос статуса")
         val endsAt = p.getLong(ENDS_AT, 0)
-        if (state == ON && endsAt > 0 && now > endsAt) p.edit().putString(STATE, OFF).apply()
+        if (state == ON && endsAt in 1..now) p.edit().putString(STATE, OFF).apply()
     }
-
-    const val KIND_COMMAND = "command"
-    const val KIND_STATUS = "status"
 
     private fun send(ctx: Context, cmd: String, kind: String): Boolean {
         val p = prefs(ctx)
@@ -150,43 +226,94 @@ object Heater {
         return phone.isNotEmpty() && phone == from
     }
 
-    private val heaterRe = Regex("""HEATER\s*(ON|OFF)(?:\s*(\d+)\s*min)?""", RegexOption.IGNORE_CASE)
-    private val coolantRe = Regex("""Temp\s*heater\s*:\s*(-?\d+)""", RegexOption.IGNORE_CASE)
-    private val cabinRe = Regex("""Temp\s*sensor\s*:\s*(-?\d+)""", RegexOption.IGNORE_CASE)
-    private val errorsRe = Regex("""Error\s*code\s*:[ \t]*([^\r\n]*)""", RegexOption.IGNORE_CASE)
+    class Status(
+        val on: Boolean?, val minutes: Long?,
+        val coolant: String?, val cabin: String?, val voltage: String?, val flame: Boolean?,
+        val errors: String?,
+    )
+
+    private val stateRe = Regex("""^HEATER\s+(ON|OFF)\b(?:\D*(\d+)\s*MIN)?""", RegexOption.IGNORE_CASE)
+    private val numberRe = Regex("""-?\d+(?:[.,]\d+)?""")
+
+    /** Null if the SMS is not a status reply */
+    fun parse(text: String): Status? {
+        var on: Boolean? = null
+        var minutes: Long? = null
+        val fields = mutableMapOf<String, String>()
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            val state = stateRe.find(line)
+            if (state != null) {
+                on = state.groupValues[1].equals("ON", true)
+                minutes = state.groupValues[2].toLongOrNull()
+                continue
+            }
+            val colon = line.indexOf(':')
+            if (colon < 0) continue
+            // "Temp heater" and "Error code" are the WBUS-4/5 spelling
+            val key = line.substring(0, colon).trim().uppercase().removePrefix("TEMP ").trim()
+            fields[key] = line.substring(colon + 1).trim()
+        }
+        fun number(key: String) = fields[key]?.let { numberRe.find(it)?.value?.replace(',', '.') }
+        val errors = fields.entries.firstOrNull { it.key.startsWith("ERR") }?.value
+        val status = Status(
+            on, minutes,
+            coolant = number("HEATER"),
+            cabin = number("SENSOR"),
+            voltage = number("VOLTAGE"),
+            flame = fields["FLAME"]?.let { it.equals("YES", true) },
+            errors = errors,
+        )
+        val known = on != null || status.coolant != null || status.cabin != null || status.flame != null
+        return if (known) status else null
+    }
 
     fun onReply(ctx: Context, text: String) {
         val p = prefs(ctx)
-        val e = p.edit()
-        val now = now()
-
-        val coolant = coolantRe.find(text)?.groupValues?.get(1)
-        val cabin = cabinRe.find(text)?.groupValues?.get(1)
-        val errors = errorsRe.find(text)?.groupValues?.get(1)?.trim()
-        if (coolant != null || cabin != null || errors != null) {
-            e.putString(COOLANT, coolant.orEmpty())
-            e.putString(CABIN, cabin.orEmpty())
-            // "none" or FF: no errors; empty: the heater did not answer on the bus
-            e.putString(ERRORS, when {
-                errors == null -> ""
-                errors.equals("none", true) || errors.equals("FF", true) -> "нет"
-                else -> errors
-            })
-            e.putLong(STATUS_TIME, now).putLong(STATUS_SENT, 0)
+        val s = parse(text)
+        if (s == null) {
+            p.edit().putString(MESSAGE, "Непонятный ответ Altox:\n" + text.trim().take(160)).apply()
+            return
         }
-
-        val heater = heaterRe.find(text)
-        if (heater != null) {
-            val on = heater.groupValues[1].equals("ON", true)
-            val state = p.getString(STATE, OFF)
-            when {
-                state == STARTING && !on -> e.putString(MESSAGE, "Отопитель не запустился")
-                state == STOPPING && on -> e.putString(MESSAGE, "Отопитель не остановился")
+        val now = now()
+        val e = p.edit()
+            .putString(COOLANT, s.coolant.orEmpty())
+            .putString(CABIN, s.cabin.orEmpty())
+            .putString(VOLTAGE, s.voltage.orEmpty())
+            .putBoolean(FLAME, s.flame == true)
+            // No error line, "none" or FF: no errors
+            .putString(ERRORS, s.errors?.takeUnless { it.equals("none", true) || it.equals("FF", true) }.orEmpty())
+            .putLong(STATUS_TIME, now)
+            .putLong(STATUS_SENT, 0)
+        if (s.on == null) {
+            e.apply()
+            return
+        }
+        val state = p.getString(STATE, OFF)
+        when {
+            state == STARTING && s.on -> {
+                val run = minutes(ctx) * 60_000L
+                val sentAt = p.getLong(CMD_SENT_AT, 0).takeIf { it > 0 } ?: now
+                e.putString(STATE, ON).putLong(ON_SINCE, sentAt)
+                    .putLong(RUN_TOTAL, run).putLong(ENDS_AT, sentAt + run).putLong(POLL_AT, 0)
             }
-            if (on && state != ON) e.putLong(ON_SINCE, now)
-            val minutes = heater.groupValues[2].toLongOrNull()
-            e.putLong(ENDS_AT, if (on && minutes != null) now + minutes * 60_000 else 0)
-            e.putString(STATE, if (on) ON else OFF)
+            state == STOPPING && !s.on -> e.putString(STATE, OFF).putLong(POLL_AT, 0)
+            isPending(state) -> {
+                e.apply()
+                val next = now + timing(state).pollEvery
+                if (next > p.getLong(DEADLINE, 0)) {
+                    p.edit().putString(PREV_STATE, if (s.on) ON else OFF).apply()
+                    commandFailed(ctx, if (state == STARTING) "Отопитель не запустился" else "Отопитель не остановился")
+                } else planPoll(ctx, next)
+                return
+            }
+            s.on && state != ON -> {
+                // Started elsewhere: from the reply's minutes, if any
+                val run = (s.minutes ?: 0) * 60_000
+                e.putString(STATE, ON).putLong(ON_SINCE, now)
+                    .putLong(RUN_TOTAL, run).putLong(ENDS_AT, if (run > 0) now + run else 0)
+            }
+            !s.on -> e.putString(STATE, OFF)
         }
         e.apply()
     }
