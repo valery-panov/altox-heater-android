@@ -2,6 +2,9 @@ package io.github.altoxheater
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -82,6 +85,10 @@ object Heater {
     const val KIND_COMMAND = "command"
     const val KIND_STATUS = "status"
 
+    /** MainActivity is on screen: no notifications then */
+    @Volatile var foreground = false
+
+    /** State is written with commit(): after a receiver returns, the process may be killed at once */
     fun prefs(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences("heater", Context.MODE_PRIVATE)
 
@@ -100,8 +107,9 @@ object Heater {
     fun stop(ctx: Context) = command(ctx, "STOP", STOPPING)
 
     fun requestStatus(ctx: Context) {
-        prefs(ctx).edit().putLong(STATUS_SENT, now()).remove(MESSAGE).apply()
+        prefs(ctx).edit().putLong(STATUS_SENT, now()).remove(MESSAGE).commit()
         if (!send(ctx, "STATUS", KIND_STATUS)) statusFailed(ctx, "Не удалось отправить SMS")
+        else scheduleWake(ctx)
     }
 
     private fun command(ctx: Context, cmd: String, pending: String) {
@@ -114,8 +122,9 @@ object Heater {
             .putLong(POLL_AT, 0)
             .putLong(STATUS_SENT, 0)
             .remove(MESSAGE)
-            .apply()
+            .commit()
         if (!send(ctx, cmd, KIND_COMMAND)) commandFailed(ctx, "Не удалось отправить SMS")
+        else scheduleWake(ctx)
     }
 
     /** The command SMS has left: plan the first STATUS */
@@ -124,40 +133,92 @@ object Heater {
         val state = p.getString(STATE, OFF)
         if (!isPending(state) || p.getLong(CMD_SENT_AT, 0) > 0) return
         val t = timing(state)
-        p.edit().putLong(CMD_SENT_AT, at).putLong(DEADLINE, at + t.timeout).apply()
+        p.edit().putLong(CMD_SENT_AT, at).putLong(DEADLINE, at + t.timeout).commit()
         planPoll(ctx, at + t.firstPoll)
     }
 
     fun commandFailed(ctx: Context, message: String) {
         val p = prefs(ctx)
-        if (!isPending(p.getString(STATE, OFF))) return
+        val state = p.getString(STATE, OFF)
+        if (!isPending(state)) return
         p.edit()
             .putString(STATE, p.getString(PREV_STATE, OFF))
             .putLong(POLL_AT, 0)
             .putLong(STATUS_SENT, 0)
             .putString(MESSAGE, message)
-            .apply()
+            .commit()
+        scheduleWake(ctx)
+        notify(ctx, if (state == STARTING) "Пуск не подтверждён" else "Остановка не подтверждена", message)
     }
 
     fun statusFailed(ctx: Context, message: String) {
         val p = prefs(ctx)
-        if (isPending(p.getString(STATE, OFF))) commandFailed(ctx, message)
-        else p.edit().putLong(STATUS_SENT, 0).putString(MESSAGE, message).apply()
+        if (isPending(p.getString(STATE, OFF))) return commandFailed(ctx, message)
+        p.edit().putLong(STATUS_SENT, 0).putString(MESSAGE, message).commit()
+        scheduleWake(ctx)
+        notify(ctx, "Статус не получен", message)
     }
 
     private fun timing(state: String?) = if (state == STARTING) START else STOP
 
     private fun planPoll(ctx: Context, at: Long) {
-        prefs(ctx).edit().putLong(POLL_AT, at).putLong(POLL_FROM, now()).apply()
-        // Wakes us up if the app is closed; while it is open, MainActivity calls tick() itself
+        prefs(ctx).edit().putLong(POLL_AT, at).putLong(POLL_FROM, now()).commit()
+        scheduleWake(ctx)
+    }
+
+    /** When tick() has something to do next: a STATUS to send, a timeout, the end of a run; 0 if nothing */
+    fun nextWake(ctx: Context): Long {
+        val p = prefs(ctx)
+        val state = p.getString(STATE, OFF)
+        val statusSent = p.getLong(STATUS_SENT, 0)
+        return listOfNotNull(
+            p.getLong(PENDING_SINCE, 0).takeIf { isPending(state) && p.getLong(CMD_SENT_AT, 0) == 0L }
+                ?.let { it + SENT_TIMEOUT + 1 },
+            p.getLong(POLL_AT, 0).takeIf { isPending(state) && it > 0 },
+            statusSent.takeIf { it > 0 }?.let { it + REPLY_TIMEOUT + 1 },
+            p.getLong(ENDS_AT, 0).takeIf { state == ON && it > 0 },
+        ).minOrNull() ?: 0
+    }
+
+    /**
+     * Wakes tick() up through PollReceiver at nextWake(), so commands go on while the app is
+     * closed; while it is open, MainActivity calls tick() itself
+     */
+    private fun scheduleWake(ctx: Context) {
         val am = ctx.getSystemService(AlarmManager::class.java)
         val pi = PendingIntent.getBroadcast(
             ctx, 0, Intent(ctx, PollReceiver::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        if (Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms())
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        val at = nextWake(ctx)
+        when {
+            at == 0L -> am.cancel(pi)
+            Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms() ->
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            else -> am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        }
+    }
+
+    private const val CHANNEL = "heater"
+
+    /** Tells the result of a command when the app is not on screen */
+    private fun notify(ctx: Context, title: String, text: String) {
+        if (foreground) return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Отопитель", NotificationManager.IMPORTANCE_DEFAULT))
+        val open = PendingIntent.getActivity(
+            ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        nm.notify(1, Notification.Builder(ctx, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build())
     }
 
     /** Sends a planned STATUS, gives up on what got no reply, ends an expired run */
@@ -172,8 +233,9 @@ object Heater {
             when {
                 p.getLong(CMD_SENT_AT, 0) == 0L && now - pendingSince > SENT_TIMEOUT -> commandSent(ctx, pendingSince)
                 pollAt in 1..now -> {
-                    p.edit().putLong(POLL_AT, 0).putLong(STATUS_SENT, now).apply()
+                    p.edit().putLong(POLL_AT, 0).putLong(STATUS_SENT, now).commit()
                     if (!send(ctx, "STATUS", KIND_STATUS)) commandFailed(ctx, "Не удалось отправить SMS")
+                    else scheduleWake(ctx)
                 }
                 statusSent > 0 && now - statusSent > REPLY_TIMEOUT -> commandFailed(ctx, "Нет ответа от Altox")
             }
@@ -182,7 +244,11 @@ object Heater {
         val statusSent = p.getLong(STATUS_SENT, 0)
         if (statusSent > 0 && now - statusSent > REPLY_TIMEOUT) statusFailed(ctx, "Нет ответа на запрос статуса")
         val endsAt = p.getLong(ENDS_AT, 0)
-        if (state == ON && endsAt in 1..now) p.edit().putString(STATE, OFF).apply()
+        if (state == ON && endsAt in 1..now) {
+            p.edit().putString(STATE, OFF).commit()
+            scheduleWake(ctx)
+            notify(ctx, "Нагрев завершён", "Время работы истекло")
+        }
     }
 
     private fun send(ctx: Context, cmd: String, kind: String): Boolean {
@@ -273,7 +339,7 @@ object Heater {
         val p = prefs(ctx)
         val s = parse(text)
         if (s == null) {
-            p.edit().putString(MESSAGE, "Непонятный ответ Altox:\n" + text.trim().take(160)).apply()
+            p.edit().putString(MESSAGE, "Непонятный ответ Altox:\n" + text.trim().take(160)).commit()
             return
         }
         val now = now()
@@ -285,7 +351,8 @@ object Heater {
             .putLong(STATUS_TIME, now)
             .putLong(STATUS_SENT, 0)
         if (s.on == null) {
-            e.apply()
+            e.commit()
+            scheduleWake(ctx)
             return
         }
         val state = p.getString(STATE, OFF)
@@ -295,13 +362,17 @@ object Heater {
                 val sentAt = p.getLong(CMD_SENT_AT, 0).takeIf { it > 0 } ?: now
                 e.putString(STATE, ON).putLong(ON_SINCE, sentAt)
                     .putLong(RUN_TOTAL, run).putLong(ENDS_AT, sentAt + run).putLong(POLL_AT, 0)
+                notify(ctx, "Нагрев запущен", "На ${minutes(ctx)} мин" + (s.coolant?.let { ", ОЖ $it °C" } ?: ""))
             }
-            state == STOPPING && !s.on -> e.putString(STATE, OFF).putLong(POLL_AT, 0)
+            state == STOPPING && !s.on -> {
+                e.putString(STATE, OFF).putLong(POLL_AT, 0)
+                notify(ctx, "Нагрев выключен", s.coolant?.let { "ОЖ $it °C" } ?: "")
+            }
             isPending(state) -> {
-                e.apply()
+                e.commit()
                 val next = now + timing(state).pollEvery
                 if (next > p.getLong(DEADLINE, 0)) {
-                    p.edit().putString(PREV_STATE, if (s.on) ON else OFF).apply()
+                    p.edit().putString(PREV_STATE, if (s.on) ON else OFF).commit()
                     commandFailed(ctx, if (state == STARTING) "Отопитель не запустился" else "Отопитель не остановился")
                 } else planPoll(ctx, next)
                 return
@@ -314,8 +385,12 @@ object Heater {
             }
             !s.on -> e.putString(STATE, OFF)
         }
-        e.apply()
+        e.commit()
+        scheduleWake(ctx)
     }
 
-    private fun now() = System.currentTimeMillis()
+    /** Replaced in tests to move time forward */
+    var clock: () -> Long = System::currentTimeMillis
+
+    fun now() = clock()
 }

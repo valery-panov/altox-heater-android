@@ -7,8 +7,14 @@
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <!-- List of SIM cards for choosing the sending slot -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    <!-- STATUS after a command on time while the app is closed; without it a bit later -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- STATUS and timeouts on time while the app is closed. Exact alarms: granted by default up to
+         Android 12, USE_EXACT_ALARM from 13 (Google Play limits it, the app is not there) -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- The result of a command while the app is closed -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
