@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -89,16 +88,12 @@ class MainActivity : Activity() {
         // Looks active all the time (it shows the time left), but takes touches only when idle
         minutes.setOnTouchListener { _, _ -> !sliderEditable }
 
-        // Notifications only on start: they are not needed to send commands
-        val wanted = listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS) +
-            if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
-        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        val missing = listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
 
     override fun onResume() {
         super.onResume()
-        Heater.foreground = true
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         render()
         handler.post(frame)
@@ -106,7 +101,6 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
-        Heater.foreground = false
         prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         handler.removeCallbacks(frame)
     }
@@ -221,6 +215,8 @@ class MainActivity : Activity() {
                     minutesLabel.text = String.format(Locale.US, "%02d мин : %04.1f сек",
                         left / 60_000, left % 60_000 / 1000.0)
                     minutes.progress = position(left / 60_000.0)
+                    // The run is over, the STATUS after it tells whether the heater is off
+                    if (left == 0L) spin(power, if (statusSent > 0) "ждём ответ\n${(now - statusSent) / 1000} с" else "")
                 } else {
                     // Started elsewhere, the run time is unknown
                     power.progress = -1f

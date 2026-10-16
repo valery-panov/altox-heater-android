@@ -13,9 +13,7 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.RadioButton
 import android.widget.RadioGroup
-import android.widget.SeekBar
 import android.widget.TextView
-import kotlin.math.abs
 
 class SettingsActivity : Activity() {
     private lateinit var phone: EditText
@@ -25,7 +23,7 @@ class SettingsActivity : Activity() {
     private lateinit var pollDelay: EditText
     private lateinit var periodic: CheckBox
     private lateinit var periodicLabel: TextView
-    private lateinit var periodicInterval: SeekBar
+    private lateinit var periodicInterval: EditText
     private lateinit var saveButton: Button
 
     private val prefs by lazy { Heater.prefs(this) }
@@ -47,8 +45,7 @@ class SettingsActivity : Activity() {
         replyTimeout.setText(savedTimeout().toString())
         pollDelay.setText(savedDelay().toString())
         periodic.isChecked = prefs.getBoolean(Heater.PERIODIC, false)
-        periodicInterval.max = Heater.PERIODIC_STEPS.size - 1
-        periodicInterval.progress = Heater.PERIODIC_STEPS.indexOf(savedInterval())
+        periodicInterval.setText(savedInterval().toString())
         findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
         saveButton = findViewById(R.id.save)
         saveButton.setOnClickListener { save() }
@@ -69,11 +66,7 @@ class SettingsActivity : Activity() {
         pollDelay.addTextChangedListener(watcher)
         sim.setOnCheckedChangeListener { _, _ -> updateSave() }
         periodic.setOnCheckedChangeListener { _, _ -> updateSave() }
-        periodicInterval.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) = updateSave()
-            override fun onStartTrackingTouch(bar: SeekBar) {}
-            override fun onStopTrackingTouch(bar: SeekBar) {}
-        })
+        periodicInterval.addTextChangedListener(watcher)
         updateSave()
     }
 
@@ -84,19 +77,36 @@ class SettingsActivity : Activity() {
             replyTimeout.text.toString().trim() != savedTimeout().toString() ||
             pollDelay.text.toString().trim() != savedDelay().toString() ||
             periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) ||
-            interval() != savedInterval()
+            periodicInterval.text.toString().trim() != savedInterval().toString()
         periodicInterval.isEnabled = periodic.isChecked
-        val perHour = if (3600 % interval() == 0) ", это ${3600 / interval()} SMS в час" else ""
-        periodicLabel.text = "Раз в " + intervalText(interval()) + perHour
+        periodicLabel.text = periodicText()
+    }
+
+    /** "22 минуты 12 секунд, это 2 SMS за цикл 50 мин плюс одна SMS в конце" */
+    private fun periodicText(): String {
+        val run = Heater.minutes(this)
+        if (!periodic.isChecked) return "Только одна SMS в конце нагрева"
+        val s = interval() ?: return "Недопустимое значение - приемлемый интервал от ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last} сек"
+        val m = s / 60
+        val time = listOfNotNull(
+            if (m > 0) "$m " + plural(m, "минута", "минуты", "минут") else null,
+            if (s % 60 > 0) "${s % 60} " + plural(s % 60, "секунда", "секунды", "секунд") else null,
+        ).joinToString(" ")
+        return "$time, это ${Heater.periodicPerRun(s, run)} SMS за цикл $run мин плюс одна SMS в конце"
+    }
+
+    private fun plural(n: Int, one: String, few: String, many: String) = when {
+        n % 100 in 11..14 -> many
+        n % 10 == 1 -> one
+        n % 10 in 2..4 -> few
+        else -> many
     }
 
     private fun savedTimeout() = (Heater.replyTimeout(this) / 1000).toInt()
     private fun savedDelay() = (Heater.pollDelay(this) / 1000).toInt()
-    private fun savedInterval() = prefs.getInt(Heater.PERIODIC_INTERVAL, Heater.PERIODIC_DEFAULT)
-        .let { saved -> Heater.PERIODIC_STEPS.minBy { abs(it - saved) } }
-    private fun interval() = Heater.PERIODIC_STEPS[periodicInterval.progress]
-
-    private fun intervalText(s: Int) = if (s >= 3600) "час" else "${s / 60} мин"
+    private fun savedInterval() = (Heater.periodicInterval(this) / 1000).toInt()
+    /** The typed interval, seconds; null if out of range */
+    private fun interval() = periodicInterval.text.toString().trim().toIntOrNull()?.takeIf { it in Heater.PERIODIC_RANGE }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         fillSims()
@@ -137,11 +147,16 @@ class SettingsActivity : Activity() {
             pollDelay.error = "От ${Heater.POLL_DELAY_RANGE.first} до ${Heater.POLL_DELAY_RANGE.last} секунд"
             return
         }
+        val interval = interval()
+        if (periodic.isChecked && interval == null) {
+            periodicInterval.error = "От ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last} секунд"
+            return
+        }
         prefs.edit()
             .putInt(Heater.REPLY_TIMEOUT, timeout)
             .putInt(Heater.POLL_DELAY, delay)
             .putBoolean(Heater.PERIODIC, periodic.isChecked)
-            .putInt(Heater.PERIODIC_INTERVAL, interval())
+            .putInt(Heater.PERIODIC_INTERVAL, interval ?: savedInterval())
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)
             .putString(Heater.PASSWORD, password.text.toString().trim())

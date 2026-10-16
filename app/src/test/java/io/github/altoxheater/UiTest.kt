@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.Application
-import android.app.NotificationManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -44,7 +43,6 @@ class UiTest {
         Heater.clock = { time }
         shadowOf(app).grantPermissions(
             Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.POST_NOTIFICATIONS,
         )
     }
 
@@ -207,7 +205,6 @@ class UiTest {
         val c = Robolectric.buildActivity(MainActivity::class.java).setup()
         power(c.get()).performClick()
         c.pause().stop().destroy()
-        assertFalse(Heater.foreground)
 
         Heater.commandSent(app) // what SentReceiver does
         assertEquals(time + 6_000, nextAlarm())
@@ -219,9 +216,8 @@ class UiTest {
         time += 5_000
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
         assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
-        assertEquals("Нагрев запущен" to "На 30 мин, ОЖ 12 °C", lastNotification())
-        // Next wake-up: the end of the run
-        assertEquals(Heater.prefs(app).getLong(Heater.ENDS_AT, 0), nextAlarm())
+        // Next wake-up: STATUS after the end of the run
+        assertEquals(Heater.prefs(app).getLong(Heater.ENDS_AT, 0) + 6_000, nextAlarm())
 
         val a = launch()
         assertEquals("Стоп", power(a).label)
@@ -240,20 +236,7 @@ class UiTest {
         time = nextAlarm()
         PollReceiver().onReceive(app, Intent())
         assertEquals(Heater.OFF, Heater.prefs(app).getString(Heater.STATE, ""))
-        assertEquals("Пуск не подтверждён" to "Нет ответа от Altox", lastNotification())
         assertEquals(0L, Heater.nextWake(app))
-    }
-
-    /** No notifications while the screen is open */
-    @Test fun noNotificationInForeground() {
-        configure()
-        val a = launch()
-        power(a).performClick()
-        Heater.commandSent(app)
-        Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
-        idle()
-        assertEquals("Стоп", power(a).label)
-        assertEquals(null, lastNotification())
     }
 
     @Test fun settings() {
@@ -268,13 +251,22 @@ class UiTest {
         val timeout = a.findViewById<android.widget.EditText>(R.id.replyTimeout)
         assertEquals("60", timeout.text.toString())
         assertEquals("6", a.findViewById<android.widget.EditText>(R.id.pollDelay).text.toString())
-        assertEquals("Раз в 10 мин, это 6 SMS в час", text(a, R.id.periodicLabel))
-        val periodicBar = a.findViewById<SeekBar>(R.id.periodicInterval)
-        periodicBar.progress = periodicBar.max
-        assertEquals("Раз в час, это 1 SMS в час", text(a, R.id.periodicLabel))
-        periodicBar.progress = Heater.PERIODIC_STEPS.indexOf(2700)
-        assertEquals("Раз в 45 мин", text(a, R.id.periodicLabel))
-        periodicBar.progress = Heater.PERIODIC_STEPS.indexOf(600)
+        assertEquals("Только одна SMS в конце нагрева", text(a, R.id.periodicLabel))
+        a.findViewById<android.widget.CheckBox>(R.id.periodic).isChecked = true
+        val interval = a.findViewById<android.widget.EditText>(R.id.periodicInterval)
+        assertEquals("600", interval.text.toString())
+        assertEquals("10 минут, это 2 SMS за цикл 30 мин плюс одна SMS в конце", text(a, R.id.periodicLabel))
+        interval.setText("1332")
+        assertEquals("22 минуты 12 секунд, это 1 SMS за цикл 30 мин плюс одна SMS в конце", text(a, R.id.periodicLabel))
+        interval.setText("3600")
+        assertEquals("60 минут, это 0 SMS за цикл 30 мин плюс одна SMS в конце", text(a, R.id.periodicLabel))
+        interval.setText("31")
+        assertEquals("31 секунда, это 56 SMS за цикл 30 мин плюс одна SMS в конце", text(a, R.id.periodicLabel))
+        interval.setText("29")
+        assertEquals("Недопустимое значение - приемлемый интервал от 30 до 3600 сек", text(a, R.id.periodicLabel))
+        save.performClick()
+        assertFalse(a.isFinishing) // out of range
+        interval.setText("1332")
         timeout.setText("5")
         save.performClick()
         assertFalse(a.isFinishing) // out of range
@@ -282,7 +274,66 @@ class UiTest {
         save.performClick()
         assertEquals("+79001112233", Heater.prefs(app).getString(Heater.PHONE, ""))
         assertEquals(45_000L, Heater.replyTimeout(app))
+        assertEquals(1_332_000L, Heater.periodic(app))
         assertTrue(a.isFinishing)
+    }
+
+    @Test fun periodicPerRun() {
+        assertEquals(2, Heater.periodicPerRun(1332, 50))
+        assertEquals(5, Heater.periodicPerRun(300, 30)) // not at 30 min: that is the end
+        assertEquals(0, Heater.periodicPerRun(600, 10))
+    }
+
+    /** The run time is over: STATUS confirms the heater is off */
+    @Test fun endOfRun() {
+        configure()
+        val a = launch()
+        power(a).performClick()
+        Heater.commandSent(app)
+        advance(6_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
+        idle()
+        val endsAt = Heater.prefs(app).getLong(Heater.ENDS_AT, 0)
+        assertEquals(endsAt + 6_000, nextAlarm())
+
+        advance(endsAt + 6_000 - time)
+        assertEquals("STATUS", lastSms())
+        assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertTrue(power(a).isEnabled) // Stop stays free
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 70))
+        idle()
+        assertEquals("Пуск", power(a).label)
+        assertEquals("", text(a, R.id.message))
+        assertEquals(0L, Heater.nextWake(app))
+    }
+
+    /** The STATUS after the end got no reply: the run ends anyway */
+    @Test fun endOfRunNoReply() {
+        configure()
+        launch()
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 50))
+        Heater.prefs(app).edit().putLong(Heater.ENDS_AT, time + 60_000).putLong(Heater.RUN_TOTAL, 60_000).commit()
+        time += 66_000
+        Heater.tick(app)
+        assertEquals("STATUS", lastSms())
+        time += Heater.replyTimeout(app) + 1
+        Heater.tick(app)
+        Heater.tick(app)
+        assertEquals(Heater.OFF, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertEquals(0L, Heater.nextWake(app))
+    }
+
+    /** Still on after the end: started again elsewhere */
+    @Test fun endOfRunStillOn() {
+        configure()
+        launch()
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 50))
+        Heater.prefs(app).edit().putLong(Heater.ENDS_AT, time + 60_000).putLong(Heater.RUN_TOTAL, 60_000).commit()
+        time += 66_000
+        Heater.tick(app)
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 60))
+        assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertEquals(0L, Heater.prefs(app).getLong(Heater.ENDS_AT, -1))
     }
 
     @Test fun pollDelaySetting() {
@@ -322,8 +373,7 @@ class UiTest {
         Heater.onReply(app, reply(on = false, flame = false, coolant = 40))
         idle()
         assertEquals("Пуск", power(a).label)
-        assertEquals("Отопитель выключился раньше срока", text(a, R.id.message))
-        assertEquals("Отопитель выключился раньше срока" to "Выключился за 20 мин до конца, ОЖ 40 °C", lastNotification())
+        assertEquals("Отопитель выключился раньше срока, за 20 мин до конца", text(a, R.id.message))
         assertEquals(0L, Heater.nextWake(app))
     }
 
@@ -352,11 +402,6 @@ class UiTest {
 
     private fun nextAlarm(): Long =
         shadowOf(app.getSystemService(AlarmManager::class.java)).peekNextScheduledAlarm()!!.triggerAtMs
-
-    private fun lastNotification(): Pair<String, String>? =
-        shadowOf(app.getSystemService(NotificationManager::class.java)).allNotifications.lastOrNull()?.let {
-            shadowOf(it).contentTitle.toString() to shadowOf(it).contentText.toString()
-        }
 
     /** Moves the fake clock and lets the screen's 100 ms timer run */
     private fun advance(ms: Long) {
