@@ -94,7 +94,9 @@
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
                 android:progressDrawable="@drawable/slider_track"
-                android:thumb="@drawable/slider_thumb" />
+                android:progressTint="@color/slider_tint"
+                android:thumb="@drawable/slider_thumb"
+                android:thumbTint="@color/slider_tint" />
 
             <TextView
                 android:id="@+id/pollDelayLabel"
@@ -139,7 +141,9 @@
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
                 android:progressDrawable="@drawable/slider_track"
-                android:thumb="@drawable/slider_thumb" />
+                android:progressTint="@color/slider_tint"
+                android:thumb="@drawable/slider_thumb"
+                android:thumbTint="@color/slider_tint" />
 
             <TextView
                 android:id="@+id/periodicCountLabel"
