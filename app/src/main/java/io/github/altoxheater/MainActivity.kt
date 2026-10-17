@@ -23,6 +23,7 @@ class MainActivity : Activity() {
     private lateinit var minutesTitle: TextView
     private lateinit var minutesLabel: TextView
     private lateinit var minutes: SeekBar
+    private lateinit var smsLabel: TextView
     private lateinit var status: RoundButton
     private lateinit var statusBlock: View
     private lateinit var flame: ImageView
@@ -50,6 +51,7 @@ class MainActivity : Activity() {
         minutesTitle = findViewById(R.id.minutesTitle)
         minutesLabel = findViewById(R.id.minutesLabel)
         minutes = findViewById(R.id.minutes)
+        smsLabel = findViewById(R.id.smsLabel)
         status = findViewById(R.id.status)
         statusBlock = findViewById(R.id.statusBlock)
         flame = findViewById(R.id.flame)
@@ -74,7 +76,7 @@ class MainActivity : Activity() {
             if (ensureSmsPermissions()) Heater.requestStatus(this)
         }
 
-        // While heating the slider shows the time left, so it moves smoothly between the steps
+        // While heating the slider shows the part of the run left, see renderFrame()
         minutes.max = (Heater.RUN_MINUTES.size - 1) * STEP
         minutes.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
@@ -167,6 +169,9 @@ class MainActivity : Activity() {
             minutes.progress = position(Heater.minutes(this).toDouble())
         }
 
+        smsLabel.visibility = if (configured) View.VISIBLE else View.INVISIBLE
+        smsLabel.text = Heater.periodicText(this, Heater.periodic(this))
+
         val time = prefs.getLong(Heater.STATUS_TIME, 0)
         statusBlock.visibility = if (time == 0L) View.INVISIBLE else View.VISIBLE
         if (time > 0) {
@@ -214,7 +219,8 @@ class MainActivity : Activity() {
                     minutesTitle.text = "Осталось"
                     minutesLabel.text = String.format(Locale.US, "%02d мин : %04.1f сек",
                         left / 60_000, left % 60_000 / 1000.0)
-                    minutes.progress = position(left / 60_000.0)
+                    // The whole width is this run: from the right edge at the start to the left at the end
+                    minutes.progress = (minutes.max * left / total).toInt()
                     // The run is over, the STATUS after it tells whether the heater is off
                     if (left == 0L) spin(power, if (statusSent > 0) "ждём ответ\n${(now - statusSent) / 1000} с" else "")
                 } else {

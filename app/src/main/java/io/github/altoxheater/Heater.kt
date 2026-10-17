@@ -125,6 +125,38 @@ object Heater {
     fun periodicCount(ctx: Context) =
         prefs(ctx).getInt(PERIODIC_COUNT, PERIODIC_DEFAULT).coerceIn(PERIODIC_RANGE)
 
+    /** SMS a run sends: START, the STATUS after it, [count] periodic ones, the STATUS at the end */
+    fun smsPerRun(count: Int) = count + 3
+
+    /**
+     * What a run sends, for [count] periodic STATUS (0: off), shown in the settings and on the main screen:
+     * "Раз в 16 минут 40 секунд за цикл 50 мин (выбран сейчас)
+     * Всего за цикл 5 SMS: пуск, статус после пуска, 2 опроса, статус в конце"
+     */
+    fun periodicText(ctx: Context, count: Int): String {
+        if (count == 0) return "Всего за цикл ${smsPerRun(0)} SMS: пуск, статус после пуска, статус в конце"
+        val p = prefs(ctx)
+        val run = periodicRun(ctx)
+        val heating = p.getString(STATE, OFF) == ON && p.getLong(RUN_TOTAL, 0) > 0
+        val s = (periodicStep(count, run) / 1000).toInt()
+        val m = s / 60
+        val time = listOfNotNull(
+            if (m > 0) "$m " + plural(m, "минуту", "минуты", "минут") else null,
+            if (s % 60 > 0) "${s % 60} " + plural(s % 60, "секунду", "секунды", "секунд") else null,
+        ).joinToString(" ")
+        val cycle = if (heating) "текущий\u00A0нагрев" else "выбран\u00A0сейчас"
+        return "Раз в $time за цикл ${run / 60_000} мин ($cycle)\n" +
+            "Всего за цикл ${smsPerRun(count)} SMS: пуск, статус после пуска, $count\u00A0" +
+            plural(count, "опрос", "опроса", "опросов") + ", статус в конце"
+    }
+
+    private fun plural(n: Int, one: String, few: String, many: String) = when {
+        n % 100 in 11..14 -> many
+        n % 10 == 1 -> one
+        n % 10 in 2..4 -> few
+        else -> many
+    }
+
     /** Time between periodic STATUS, ms: [count] of them split a run of [run] ms evenly */
     fun periodicStep(count: Int, run: Long) = run / (count + 1)
 

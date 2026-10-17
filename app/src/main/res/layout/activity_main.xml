@@ -81,6 +81,15 @@
         android:progressDrawable="@drawable/slider_track"
         android:thumb="@drawable/slider_thumb" />
 
+    <TextView
+        android:id="@+id/smsLabel"
+        android:layout_width="280dp"
+        android:layout_height="wrap_content"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
+
     <Space
         android:layout_width="0dp"
         android:layout_height="0dp"

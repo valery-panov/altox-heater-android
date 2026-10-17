@@ -100,36 +100,7 @@ class SettingsActivity : Activity() {
         periodicCountLabel.text = count().toString()
         periodicCount.isEnabled = periodic.isChecked
         periodicCountLabel.isEnabled = periodic.isChecked
-        periodicLabel.text = periodicText()
-    }
-
-    /**
-     * "Раз в 16 минут 40 секунд за цикл 50 мин (выбран сейчас)
-     * Всего за цикл 5 SMS: пуск, статус после пуска, 2 опроса, статус в конце"
-     */
-    private fun periodicText(): String {
-        if (!periodic.isChecked) return "Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце"
-        val n = count()
-        val run = Heater.periodicRun(this)
-        val heating = prefs.getString(Heater.STATE, Heater.OFF) == Heater.ON &&
-            prefs.getLong(Heater.RUN_TOTAL, 0) > 0
-        val s = (Heater.periodicStep(n, run) / 1000).toInt()
-        val m = s / 60
-        val time = listOfNotNull(
-            if (m > 0) "$m " + plural(m, "минуту", "минуты", "минут") else null,
-            if (s % 60 > 0) "${s % 60} " + plural(s % 60, "секунду", "секунды", "секунд") else null,
-        ).joinToString(" ")
-        val cycle = if (heating) "текущий нагрев" else "выбран сейчас"
-        return "Раз в $time за цикл ${run / 60_000} мин ($cycle)\n" +
-            "Всего за цикл ${n + 3} SMS: пуск, статус после пуска, $n\u00A0" +
-            plural(n, "опрос", "опроса", "опросов") + ", статус в конце"
-    }
-
-    private fun plural(n: Int, one: String, few: String, many: String) = when {
-        n % 100 in 11..14 -> many
-        n % 10 == 1 -> one
-        n % 10 in 2..4 -> few
-        else -> many
+        periodicLabel.text = Heater.periodicText(this, if (periodic.isChecked) count() else 0)
     }
 
     private fun savedTimeout() = (Heater.replyTimeout(this) / 1000).toInt()

@@ -64,6 +64,7 @@ class UiTest {
         assertEquals("", power(a).sub)
         assertEquals("Время работы", text(a, R.id.minutesTitle))
         assertEquals("30 мин", text(a, R.id.minutesLabel))
+        assertEquals("Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце", text(a, R.id.smsLabel))
         shot(a, "02-idle")
 
         power(a).performClick()
@@ -91,10 +92,9 @@ class UiTest {
         assertEquals("", power(a).sub)
         assertEquals("Осталось", text(a, R.id.minutesTitle))
         assertEquals("26 мин : 47.5 сек", text(a, R.id.minutesLabel))
-        // 26.8 min sits between the 25 and 30 steps of the scale
+        // 26.8 of 30 min left: that part of the whole width
         val bar = a.findViewById<SeekBar>(R.id.minutes)
-        val i25 = Heater.RUN_MINUTES.indexOf(25) * MainActivity.STEP
-        assertTrue("${bar.progress}", bar.progress in i25 + 30..i25 + 40)
+        assertEquals(bar.max * 1607_5 / 1800_0, bar.progress)
         assertTrue(power(a).isEnabled)
         shot(a, "06-on")
 
@@ -178,8 +178,29 @@ class UiTest {
         assertTrue(a.findViewById<android.widget.TextView>(R.id.message).text.startsWith("Непонятный ответ"))
     }
 
+    /** A 12-minute run takes the whole width: right edge at the start, left at the end */
+    @Test fun sliderShortRun() {
+        configure()
+        Heater.prefs(app).edit().putInt(Heater.MINUTES, 12).commit()
+        val a = launch()
+        val bar = a.findViewById<SeekBar>(R.id.minutes)
+        power(a).performClick()
+        Heater.commandSent(app)
+        val start = time
+        advance(6_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
+        val seen = (0..11).map { m ->
+            advance(start + m * 60_000 + 30_000 - time)
+            bar.progress
+        }
+        assertTrue("$seen", seen.zipWithNext().all { (x, y) -> y < x })
+        assertTrue("$seen", seen.first() > bar.max * 9 / 10 && seen.last() in 1 until bar.max / 10)
+    }
+
     @Test fun runTimeSlider() {
         configure()
+        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).commit()
+        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).commit()
         val a = launch()
         val bar = a.findViewById<SeekBar>(R.id.minutes)
         assertEquals((Heater.RUN_MINUTES.size - 1) * MainActivity.STEP, bar.max)
@@ -187,6 +208,10 @@ class UiTest {
         shadowOf(bar).onSeekBarChangeListener.onProgressChanged(bar, Heater.RUN_MINUTES.indexOf(90) * MainActivity.STEP + 20, true)
         idle()
         assertEquals("90 мин", text(a, R.id.minutesLabel))
+        assertEquals("Раз в 30 минут за цикл 90 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.smsLabel))
+        shot(a, "14-slider-sms")
+        assertEquals("Раз в 30 минут за цикл 90 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.smsLabel))
+        shot(a, "14-slider-sms")
         power(a).performClick()
         assertEquals("START:90", lastSms())
     }
@@ -260,15 +285,15 @@ class UiTest {
         a.findViewById<android.widget.CheckBox>(R.id.periodic).isChecked = true
         val count = a.findViewById<SeekBar>(R.id.periodicCount)
         assertEquals("2", text(a, R.id.periodicCountLabel))
-        assertEquals("Раз в 10 минут за цикл 30 мин (выбран сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 10 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
         shot(a, "12-settings-periodic")
         count.progress = 2
-        assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
         count.progress = 0
-        assertEquals("Раз в 15 минут за цикл 30 мин (выбран сейчас)\nВсего за цикл 4 SMS: пуск, статус после пуска, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 15 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 4 SMS: пуск, статус после пуска, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
         count.progress = 30
         assertEquals("20", text(a, R.id.periodicCountLabel))
-        assertEquals("Раз в 1 минуту 25 секунд за цикл 30 мин (выбран сейчас)\nВсего за цикл 23 SMS: пуск, статус после пуска, 20\u00A0опросов, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 1 минуту 25 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 23 SMS: пуск, статус после пуска, 20\u00A0опросов, статус в конце", text(a, R.id.periodicLabel))
         count.progress = 2
         timeout.setText("5")
         save.performClick()
@@ -299,7 +324,7 @@ class UiTest {
         val s = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
         s.findViewById<android.widget.CheckBox>(R.id.periodic).isChecked = true
         s.findViewById<SeekBar>(R.id.periodicCount).progress = 8
-        assertEquals("Раз в 5 минут за цикл 50 мин (текущий нагрев)\nВсего за цикл 12 SMS: пуск, статус после пуска, 9\u00A0опросов, статус в конце", text(s, R.id.periodicLabel))
+        assertEquals("Раз в 5 минут за цикл 50 мин (текущий\u00A0нагрев)\nВсего за цикл 12 SMS: пуск, статус после пуска, 9\u00A0опросов, статус в конце", text(s, R.id.periodicLabel))
         s.findViewById<android.widget.Button>(R.id.save).performClick()
         assertTrue(s.isFinishing)
         assertEquals(start + 15 * 60_000, nextAlarm())
@@ -388,6 +413,7 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
         idle()
         assertEquals(start + 300_000, nextAlarm()) // 5 per 30 minutes: the run in 6 steps
+        assertEquals("Раз в 5 минут за цикл 30 мин (текущий\u00A0нагрев)\nВсего за цикл 8 SMS: пуск, статус после пуска, 5\u00A0опросов, статус в конце", text(a, R.id.smsLabel))
 
         advance(300_000)
         assertEquals("STATUS", lastSms())
