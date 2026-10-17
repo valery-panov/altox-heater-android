@@ -116,15 +116,6 @@
             android:inputType="number"
             android:maxLength="3" />
 
-        <CheckBox
-            android:id="@+id/periodic"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/periodic"
-            android:textColor="@color/text"
-            android:textSize="16sp" />
-
         <TextView style="@style/Label" android:text="@string/periodic_count" />
 
         <LinearLayout

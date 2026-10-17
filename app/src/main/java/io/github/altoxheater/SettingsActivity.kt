@@ -11,7 +11,6 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.telephony.SubscriptionManager
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.RadioButton
@@ -27,7 +26,6 @@ class SettingsActivity : Activity() {
     private lateinit var replyTimeout: EditText
     private lateinit var pollDelay: SeekBar
     private lateinit var pollDelayLabel: TextView
-    private lateinit var periodic: CheckBox
     private lateinit var periodicLabel: TextView
     private lateinit var periodicCount: SeekBar
     private lateinit var periodicCountLabel: TextView
@@ -44,7 +42,6 @@ class SettingsActivity : Activity() {
         replyTimeout = findViewById(R.id.replyTimeout)
         pollDelay = findViewById(R.id.pollDelay)
         pollDelayLabel = findViewById(R.id.pollDelayLabel)
-        periodic = findViewById(R.id.periodic)
         periodicLabel = findViewById(R.id.periodicLabel)
         periodicCount = findViewById(R.id.periodicCount)
         periodicCountLabel = findViewById(R.id.periodicCountLabel)
@@ -55,9 +52,9 @@ class SettingsActivity : Activity() {
         // Sliders count from the range's first value
         pollDelay.max = Heater.POLL_DELAY_RANGE.last - Heater.POLL_DELAY_RANGE.first
         pollDelay.progress = savedDelay() - Heater.POLL_DELAY_RANGE.first
-        periodicCount.max = Heater.PERIODIC_RANGE.last - Heater.PERIODIC_RANGE.first
-        periodicCount.progress = savedCount() - Heater.PERIODIC_RANGE.first
-        periodic.isChecked = prefs.getBoolean(Heater.PERIODIC, false)
+        // Periodic STATUS: off at the left end, auto at the right one
+        periodicCount.max = Heater.PERIODIC_RANGE.last + 1
+        periodicCount.progress = savedCount().let { if (it == Heater.PERIODIC_AUTO) periodicCount.max else it }
         findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
         findViewById<ImageButton>(R.id.pickContact).setOnClickListener { pickContact() }
         saveButton = findViewById(R.id.save)
@@ -84,7 +81,6 @@ class SettingsActivity : Activity() {
         pollDelay.setOnSeekBarChangeListener(slider)
         periodicCount.setOnSeekBarChangeListener(slider)
         sim.setOnCheckedChangeListener { _, _ -> updateSave() }
-        periodic.setOnCheckedChangeListener { _, _ -> updateSave() }
         updateSave()
     }
 
@@ -94,20 +90,21 @@ class SettingsActivity : Activity() {
             sim.checkedRadioButtonId - ID_BASE != prefs.getInt(Heater.SIM_SLOT, -1) ||
             replyTimeout.text.toString().trim() != savedTimeout().toString() ||
             delay() != savedDelay() ||
-            periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) ||
             count() != savedCount()
         pollDelayLabel.text = "${delay()} с"
-        periodicCountLabel.text = count().toString()
-        periodicCount.isEnabled = periodic.isChecked
-        periodicCountLabel.isEnabled = periodic.isChecked
-        periodicLabel.text = Heater.periodicText(this, if (periodic.isChecked) count() else 0)
+        periodicCountLabel.text = when (count()) {
+            0 -> "Выкл"
+            Heater.PERIODIC_AUTO -> "Авто"
+            else -> count().toString()
+        }
+        periodicLabel.text = Heater.periodicText(this, Heater.periodicCount(this, count()))
     }
 
     private fun savedTimeout() = (Heater.replyTimeout(this) / 1000).toInt()
     private fun savedDelay() = (Heater.pollDelay(this) / 1000).toInt()
     private fun delay() = pollDelay.progress + Heater.POLL_DELAY_RANGE.first
-    private fun savedCount() = Heater.periodicCount(this)
-    private fun count() = periodicCount.progress + Heater.PERIODIC_RANGE.first
+    private fun savedCount() = Heater.periodicSetting(this)
+    private fun count() = periodicCount.progress.let { if (it == periodicCount.max) Heater.PERIODIC_AUTO else it }
 
     private fun pickContact() {
         val pick = Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
@@ -166,12 +163,12 @@ class SettingsActivity : Activity() {
         val count = count()
         val e = prefs.edit()
         // Mid-run the new slots start from now, not from a slot already past
-        if (periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) || count != savedCount())
+        if (count != savedCount())
             e.putLong(Heater.PERIODIC_SINCE, Heater.now())
         e
             .putInt(Heater.REPLY_TIMEOUT, timeout)
             .putInt(Heater.POLL_DELAY, delay())
-            .putBoolean(Heater.PERIODIC, periodic.isChecked)
+            .remove(Heater.PERIODIC)
             .putInt(Heater.PERIODIC_COUNT, count)
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)

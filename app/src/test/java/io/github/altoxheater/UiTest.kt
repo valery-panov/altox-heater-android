@@ -58,7 +58,7 @@ class UiTest {
     }
 
     @Test fun startAndStop() {
-        configure()
+        configure(periodic = 0)
         val a = launch()
         assertEquals("Пуск", power(a).label)
         assertEquals("", power(a).sub)
@@ -199,8 +199,7 @@ class UiTest {
 
     @Test fun runTimeSlider() {
         configure()
-        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).commit()
-        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).commit()
+        Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, 2).commit()
         val a = launch()
         val bar = a.findViewById<SeekBar>(R.id.minutes)
         assertEquals((Heater.RUN_MINUTES.size - 1) * MainActivity.STEP, bar.max)
@@ -226,7 +225,7 @@ class UiTest {
 
     /** The app is closed right after Start: the alarm and the SMS receiver finish the job */
     @Test fun closedDuringStart() {
-        configure()
+        configure(periodic = 0)
         val c = Robolectric.buildActivity(MainActivity::class.java).setup()
         power(c.get()).performClick()
         c.pause().stop().destroy()
@@ -281,20 +280,26 @@ class UiTest {
         assertEquals("30 с", text(a, R.id.pollDelayLabel))
         delay.progress = 12
         assertEquals("13 с", text(a, R.id.pollDelayLabel))
-        assertEquals("Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце", text(a, R.id.periodicLabel))
-        a.findViewById<android.widget.CheckBox>(R.id.periodic).isChecked = true
         val count = a.findViewById<SeekBar>(R.id.periodicCount)
+        assertEquals("Авто", text(a, R.id.periodicCountLabel))
+        count.progress = 0
+        assertEquals("Выкл", text(a, R.id.periodicCountLabel))
+        assertEquals("Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце", text(a, R.id.periodicLabel))
+        count.progress = 2
         assertEquals("2", text(a, R.id.periodicCountLabel))
         assertEquals("Раз в 10 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
         shot(a, "12-settings-periodic")
-        count.progress = 2
+        count.progress = 3
         assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
-        count.progress = 0
+        count.progress = 1
         assertEquals("Раз в 15 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 4 SMS: пуск, статус после пуска, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
-        count.progress = 30
+        count.progress = 20
         assertEquals("20", text(a, R.id.periodicCountLabel))
         assertEquals("Раз в 1 минуту 25 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 23 SMS: пуск, статус после пуска, 20\u00A0опросов, статус в конце", text(a, R.id.periodicLabel))
-        count.progress = 2
+        count.progress = 30
+        assertEquals("Авто", text(a, R.id.periodicCountLabel))
+        assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        shot(a, "12-settings-periodic-auto")
         timeout.setText("5")
         save.performClick()
         assertFalse(a.isFinishing) // out of range
@@ -303,13 +308,32 @@ class UiTest {
         assertEquals("+79001112233", Heater.prefs(app).getString(Heater.PHONE, ""))
         assertEquals(45_000L, Heater.replyTimeout(app))
         assertEquals(13_000L, Heater.pollDelay(app))
+        assertEquals(Heater.PERIODIC_AUTO, Heater.periodicSetting(app))
         assertEquals(3, Heater.periodic(app))
         assertTrue(a.isFinishing)
     }
 
+    /** Auto: 1 to 5 STATUS by the run time; the old checkbox, if it was off, stays off */
+    @Test fun periodicAuto() {
+        assertEquals(listOf(1, 1, 2, 2, 3, 3, 4, 4, 5, 5),
+            listOf(10, 15, 16, 25, 26, 49, 50, 80, 81, 120).map { Heater.autoCount(it) })
+        configure()
+        Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, Heater.PERIODIC_AUTO).putInt(Heater.MINUTES, 90).commit()
+        val a = launch()
+        assertEquals("Будет отправлено 8 SMS (пуск, статус после пуска, 5\u00A0опросов, статус в конце).", text(a, R.id.smsLabel))
+        Heater.prefs(app).edit().putInt(Heater.MINUTES, 15).commit()
+        idle()
+        assertEquals("Будет отправлено 4 SMS (пуск, статус после пуска, 1\u00A0опрос, статус в конце).", text(a, R.id.smsLabel))
+
+        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, false).putInt(Heater.PERIODIC_COUNT, 4).commit()
+        assertEquals(0, Heater.periodicSetting(app))
+        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).commit()
+        assertEquals(4, Heater.periodicSetting(app))
+    }
+
     /** Periodic STATUS turned on mid-run: the next slot of the new grid, nothing at once */
     @Test fun periodicChangedMidRun() {
-        configure()
+        configure(periodic = 0)
         Heater.prefs(app).edit().putInt(Heater.MINUTES, 50).commit()
         val a = launch()
         power(a).performClick()
@@ -322,8 +346,7 @@ class UiTest {
 
         advance(start + 12 * 60_000 + 1_000 - time) // the 12-minute slot of 9 per run has just passed
         val s = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
-        s.findViewById<android.widget.CheckBox>(R.id.periodic).isChecked = true
-        s.findViewById<SeekBar>(R.id.periodicCount).progress = 8
+        s.findViewById<SeekBar>(R.id.periodicCount).progress = 9
         assertEquals("Раз в 5 минут за цикл 50 мин (текущий\u00A0нагрев)\nВсего за цикл 12 SMS: пуск, статус после пуска, 9\u00A0опросов, статус в конце", text(s, R.id.periodicLabel))
         s.findViewById<android.widget.Button>(R.id.save).performClick()
         assertTrue(s.isFinishing)
@@ -342,7 +365,7 @@ class UiTest {
 
     /** The run time is over: STATUS confirms the heater is off */
     @Test fun endOfRun() {
-        configure()
+        configure(periodic = 0)
         val a = launch()
         power(a).performClick()
         Heater.commandSent(app)
@@ -404,7 +427,7 @@ class UiTest {
     /** 5 STATUS per 30-minute run, every 5 minutes: fresh temperatures, Stop stays free */
     @Test fun periodicStatus() {
         configure()
-        Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, true).putInt(Heater.PERIODIC_COUNT, 5).commit()
+        Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, 5).commit()
         val a = launch()
         power(a).performClick()
         Heater.commandSent(app)
@@ -454,7 +477,8 @@ class UiTest {
         assertEquals(PHONE, Heater.prefs(app).getString(Heater.PHONE, ""))
     }
 
-    private fun configure() = Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).commit()
+    private fun configure(periodic: Int = Heater.PERIODIC_AUTO) =
+        Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).putInt(Heater.PERIODIC_COUNT, periodic).commit()
 
     private fun launch(): MainActivity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
 

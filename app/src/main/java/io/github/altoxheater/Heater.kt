@@ -44,9 +44,9 @@ object Heater {
     val POLL_DELAY_RANGE = 1..30
     const val REPLY_TIMEOUT_DEFAULT = 60
     val REPLY_TIMEOUT_RANGE = 10..300
-    /** Periodic STATUS per run, evenly spread over it */
-    const val PERIODIC_DEFAULT = 2
+    /** Periodic STATUS per run, evenly spread over it; 0 is off, PERIODIC_AUTO picks it from the run */
     val PERIODIC_RANGE = 1..20
+    const val PERIODIC_AUTO = -1
     /** No periodic STATUS this close to the end of a run: the end has its own STATUS */
     const val END_QUIET = 60_000L
 
@@ -65,8 +65,8 @@ object Heater {
     const val MINUTES = "minutes" // run time for START, the slider on the main screen
     const val REPLY_TIMEOUT = "replyTimeout" // seconds, see replyTimeout()
     const val POLL_DELAY = "pollDelay" // seconds from a command to its STATUS
-    const val PERIODIC = "periodic" // PERIODIC_COUNT STATUS while heating
-    const val PERIODIC_COUNT = "periodicCount" // per run, PERIODIC_RANGE
+    const val PERIODIC = "periodic" // before v1.14: a checkbox, PERIODIC_COUNT only while it was on
+    const val PERIODIC_COUNT = "periodicCount" // per run: 0, PERIODIC_RANGE or PERIODIC_AUTO
     const val PERIODIC_SINCE = "periodicSince" // the periodic settings changed: no slot before it
 
     // Command in progress
@@ -114,22 +114,35 @@ object Heater {
     fun pollDelay(ctx: Context) =
         prefs(ctx).getInt(POLL_DELAY, POLL_DELAY_DEFAULT).coerceIn(POLL_DELAY_RANGE) * 1000L
 
-    /** Periodic STATUS per run while heating; 0 if it is off */
-    fun periodic(ctx: Context): Int {
+    /** Periodic STATUS per run while heating, PERIODIC_AUTO resolved for periodicRun(); 0 if it is off */
+    fun periodic(ctx: Context) = periodicCount(ctx, periodicSetting(ctx))
+
+    /** The saved setting: 0 (off), a count from PERIODIC_RANGE or PERIODIC_AUTO, the default */
+    fun periodicSetting(ctx: Context): Int {
         val p = prefs(ctx)
-        if (!p.getBoolean(PERIODIC, false)) return 0
-        return periodicCount(ctx)
+        if (p.contains(PERIODIC) && !p.getBoolean(PERIODIC, false)) return 0
+        val saved = p.getInt(PERIODIC_COUNT, PERIODIC_AUTO)
+        return if (saved == PERIODIC_AUTO) saved else saved.coerceIn(0, PERIODIC_RANGE.last)
     }
 
-    /** The saved count of the periodic STATUS, whether it is on or not */
-    fun periodicCount(ctx: Context) =
-        prefs(ctx).getInt(PERIODIC_COUNT, PERIODIC_DEFAULT).coerceIn(PERIODIC_RANGE)
+    /** The count a [setting] gives for the run periodicRun() */
+    fun periodicCount(ctx: Context, setting: Int) =
+        if (setting == PERIODIC_AUTO) autoCount((periodicRun(ctx) / 60_000).toInt()) else setting
+
+    /** PERIODIC_AUTO: more STATUS for longer runs */
+    fun autoCount(minutes: Int) = when {
+        minutes <= 15 -> 1
+        minutes <= 25 -> 2
+        minutes <= 49 -> 3
+        minutes <= 80 -> 4
+        else -> 5
+    }
 
     /** SMS a run sends: START, the STATUS after it, [count] periodic ones, the STATUS at the end */
     fun smsPerRun(count: Int) = count + 3
 
     /**
-     * What a run sends, for [count] periodic STATUS (0: off), shown in the settings and on the main screen:
+     * What a run sends, for [count] periodic STATUS (0: off), shown in the settings:
      * "Раз в 16 минут 40 секунд за цикл 50 мин (выбран сейчас)
      * Всего за цикл 5 SMS: пуск, статус после пуска, 2 опроса, статус в конце"
      */
