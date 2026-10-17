@@ -9,7 +9,7 @@
     <string name="password">Пароль модуля (если задан командой PASS)</string>
     <string name="reply_timeout">Таймаут ожидания ответа от Altox, с (10–300)</string>
     <string name="poll_delay">Задержка опроса отопителя после отправки команды</string>
-    <string name="periodic_count">Опросов за цикл нагрева (температура, бортсеть), кроме статуса после пуска и в конце. Авто: 1 для 10–15 мин, 2 для 16–25, 3 для 26–49, 4 для 50–80, 5 для 81–120</string>
+    <string name="periodic_count">Опросов за цикл нагрева (температура, бортсеть), кроме статуса после пуска и в конце. Авто: 1 для 10–20 мин, 2 для 21–35, 3 для 36–49, 4 для 50–120</string>
     <string name="pick_contact">Выбрать из контактов</string>
     <string name="back">Назад</string>
     <string name="save">Сохранить</string>

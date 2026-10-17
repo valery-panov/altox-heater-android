@@ -40,7 +40,7 @@ object Heater {
     private const val POLL_WINDOW = 50_000L
 
     /** Settings' defaults and ranges, seconds */
-    const val POLL_DELAY_DEFAULT = 6
+    const val POLL_DELAY_DEFAULT = 3
     val POLL_DELAY_RANGE = 1..30
     const val REPLY_TIMEOUT_DEFAULT = 60
     val REPLY_TIMEOUT_RANGE = 10..300
@@ -56,6 +56,7 @@ object Heater {
     private const val SENT_TIMEOUT = 60_000L
 
     /** Run times on the slider: fine steps for short runs, coarse for long ones */
+    const val MINUTES_DEFAULT = 20
     val RUN_MINUTES = listOf(10, 11, 12, 13, 14, 15, 17, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 120)
 
     // Settings
@@ -67,7 +68,6 @@ object Heater {
     const val POLL_DELAY = "pollDelay" // seconds from a command to its STATUS
     const val PERIODIC = "periodic" // before v1.14: a checkbox, PERIODIC_COUNT only while it was on
     const val PERIODIC_COUNT = "periodicCount" // per run: 0, PERIODIC_RANGE or PERIODIC_AUTO
-    const val PERIODIC_SINCE = "periodicSince" // the periodic settings changed: no slot before it
 
     // Command in progress
     const val STATE = "state"
@@ -89,7 +89,7 @@ object Heater {
     // Status
     const val STATUS_SENT = "statusSent" // 0 if no STATUS is waiting for a reply
     const val STATUS_AUTO = "statusAuto" // that STATUS is a periodic one: the buttons stay free
-    const val AUTO_SENT = "autoSent" // the last periodic STATUS
+    const val AUTO_AT = "autoAt" // the next periodic STATUS, see planPeriodic(); 0: none
     const val STATUS_TIME = "statusTime"
     const val COOLANT = "coolant"
     const val CABIN = "cabin"
@@ -107,7 +107,7 @@ object Heater {
 
     /** The saved run time, snapped to the nearest step */
     fun minutes(ctx: Context): Int {
-        val saved = prefs(ctx).getInt(MINUTES, 30).takeIf { it > 0 } ?: 30
+        val saved = prefs(ctx).getInt(MINUTES, MINUTES_DEFAULT).takeIf { it > 0 } ?: MINUTES_DEFAULT
         return RUN_MINUTES.minBy { abs(it - saved) }
     }
 
@@ -131,11 +131,10 @@ object Heater {
 
     /** PERIODIC_AUTO: more STATUS for longer runs */
     fun autoCount(minutes: Int) = when {
-        minutes <= 15 -> 1
-        minutes <= 25 -> 2
+        minutes <= 20 -> 1
+        minutes <= 35 -> 2
         minutes <= 49 -> 3
-        minutes <= 80 -> 4
-        else -> 5
+        else -> 4
     }
 
     /** SMS a run sends: START, the STATUS after it, [count] periodic ones, the STATUS at the end */
@@ -263,29 +262,32 @@ object Heater {
             p.getLong(POLL_AT, 0).takeIf { isPending(state) && it > 0 },
             statusSent.takeIf { it > 0 }?.let { it + replyTimeout(ctx) + 1 },
             endCheckAt(ctx).takeIf { state == ON && statusSent == 0L && it > 0 },
-            periodicAt(ctx).takeIf { state == ON && statusSent == 0L && it > 0 },
+            p.getLong(AUTO_AT, 0).takeIf { state == ON && statusSent == 0L && it > 0 },
         ).minOrNull() ?: 0
     }
 
     /**
-     * When the next periodic STATUS is due. The run is split into count + 1 equal steps, a STATUS
-     * at each inner point. A slot is skipped if it is not after the last periodic STATUS or the
-     * last change of these settings (so changing them mid-run never sends at once), or if a reply
-     * came less than half a step before it. Without a known end the steps go on, from the slider
+     * Plans the next periodic STATUS into AUTO_AT: when a run starts, after each periodic STATUS,
+     * on each reply and when the settings are saved. The run is split into count + 1 equal steps,
+     * a STATUS at each inner point; the next one is the first point after now (so a change
+     * mid-run never sends at once) and at least half a step after the last reply. Without a known
+     * end the steps go on, from the slider
      */
-    private fun periodicAt(ctx: Context): Long {
-        val count = periodic(ctx)
-        if (count == 0) return 0
+    fun planPeriodic(ctx: Context) {
         val p = prefs(ctx)
-        val endsAt = p.getLong(ENDS_AT, 0)
-        val total = p.getLong(RUN_TOTAL, 0)
-        val step = periodicStep(count, periodicRun(ctx)).coerceAtLeast(1)
-        // A run started again after its end keeps ON_SINCE, ENDS_AT - RUN_TOTAL is its start
-        val start = if (endsAt > 0 && total > 0) endsAt - total else p.getLong(ON_SINCE, 0)
-        val after = maxOf(start, p.getLong(AUTO_SENT, 0), p.getLong(PERIODIC_SINCE, 0),
-            p.getLong(STATUS_TIME, 0) + step / 2 - 1)
-        val at = start + ((after - start) / step + 1) * step
-        return if (endsAt > 0 && at > endsAt - minOf(END_QUIET, step / 2)) 0 else at
+        val count = periodic(ctx)
+        var at = 0L
+        if (count > 0 && p.getString(STATE, OFF) == ON) {
+            val endsAt = p.getLong(ENDS_AT, 0)
+            val total = p.getLong(RUN_TOTAL, 0)
+            val step = periodicStep(count, periodicRun(ctx)).coerceAtLeast(1)
+            // A run started again after its end keeps ON_SINCE, ENDS_AT - RUN_TOTAL is its start
+            val start = if (endsAt > 0 && total > 0) endsAt - total else p.getLong(ON_SINCE, 0)
+            val after = maxOf(start, now(), p.getLong(STATUS_TIME, 0) + step / 2 - 1)
+            at = start + ((after - start) / step + 1) * step
+            if (endsAt > 0 && at > endsAt - minOf(END_QUIET, step / 2)) at = 0
+        }
+        p.edit().putLong(AUTO_AT, at).commit()
     }
 
     /**
@@ -342,7 +344,7 @@ object Heater {
         if (state == ON && p.getLong(STATUS_SENT, 0) == 0L && endCheckAt in 1..now) {
             if (!p.getBoolean(END_CHECKED, false)) {
                 // Confirms the heater is off, with the temperatures it ended at
-                p.edit().putLong(STATUS_SENT, now).putBoolean(STATUS_AUTO, true).putLong(AUTO_SENT, now)
+                p.edit().putLong(STATUS_SENT, now).putBoolean(STATUS_AUTO, true)
                     .putBoolean(END_CHECKED, true).commit()
                 if (!send(ctx, "STATUS", KIND_STATUS)) statusFailed(ctx, "Не удалось отправить SMS")
                 else scheduleWake(ctx)
@@ -352,10 +354,10 @@ object Heater {
             scheduleWake(ctx)
             return
         }
-        val periodicAt = periodicAt(ctx)
-        if (state == ON && statusSent == 0L && periodicAt in 1..now) {
+        if (state == ON && statusSent == 0L && p.getLong(AUTO_AT, 0) in 1..now) {
             // Fresh temperatures and voltage; does not lock the buttons, see STATUS_AUTO
-            p.edit().putLong(STATUS_SENT, now).putBoolean(STATUS_AUTO, true).putLong(AUTO_SENT, now).commit()
+            p.edit().putLong(STATUS_SENT, now).putBoolean(STATUS_AUTO, true).commit()
+            planPeriodic(ctx)
             if (!send(ctx, "STATUS", KIND_STATUS)) statusFailed(ctx, "Не удалось отправить SMS")
             else scheduleWake(ctx)
         }
@@ -462,6 +464,7 @@ object Heater {
             .putLong(STATUS_SENT, 0)
         if (s.on == null) {
             e.commit()
+            planPeriodic(ctx)
             scheduleWake(ctx)
             return
         }
@@ -507,6 +510,7 @@ object Heater {
             }
         }
         e.commit()
+        planPeriodic(ctx)
         scheduleWake(ctx)
     }
 

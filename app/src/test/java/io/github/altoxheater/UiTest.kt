@@ -298,7 +298,7 @@ class UiTest {
         assertEquals("Раз в 1 минуту 25 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 23 SMS: пуск, статус после пуска, 20\u00A0опросов, статус в конце", text(a, R.id.periodicLabel))
         count.progress = 30
         assertEquals("Авто", text(a, R.id.periodicCountLabel))
-        assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 10 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
         shot(a, "12-settings-periodic-auto")
         timeout.setText("5")
         save.performClick()
@@ -309,19 +309,19 @@ class UiTest {
         assertEquals(45_000L, Heater.replyTimeout(app))
         assertEquals(13_000L, Heater.pollDelay(app))
         assertEquals(Heater.PERIODIC_AUTO, Heater.periodicSetting(app))
-        assertEquals(3, Heater.periodic(app))
+        assertEquals(2, Heater.periodic(app))
         assertTrue(a.isFinishing)
     }
 
     /** Auto: 1 to 5 STATUS by the run time; the old checkbox, if it was off, stays off */
     @Test fun periodicAuto() {
-        assertEquals(listOf(1, 1, 2, 2, 3, 3, 4, 4, 5, 5),
-            listOf(10, 15, 16, 25, 26, 49, 50, 80, 81, 120).map { Heater.autoCount(it) })
+        assertEquals(listOf(1, 1, 2, 2, 3, 3, 4, 4),
+            listOf(10, 20, 21, 35, 36, 49, 50, 120).map { Heater.autoCount(it) })
         configure()
         Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, Heater.PERIODIC_AUTO).putInt(Heater.MINUTES, 90).commit()
         val a = launch()
-        assertEquals("Будет отправлено 8 SMS (пуск, статус после пуска, 5\u00A0опросов, статус в конце).", text(a, R.id.smsLabel))
-        Heater.prefs(app).edit().putInt(Heater.MINUTES, 15).commit()
+        assertEquals("Будет отправлено 7 SMS (пуск, статус после пуска, 4\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
+        Heater.prefs(app).edit().putInt(Heater.MINUTES, 20).commit()
         idle()
         assertEquals("Будет отправлено 4 SMS (пуск, статус после пуска, 1\u00A0опрос, статус в конце).", text(a, R.id.smsLabel))
 
@@ -352,14 +352,20 @@ class UiTest {
         assertTrue(s.isFinishing)
         assertEquals(start + 15 * 60_000, nextAlarm())
 
+        assertEquals(start + 15 * 60_000, Heater.prefs(app).getLong(Heater.AUTO_AT, 0))
+
         // Fewer per run: the grid is redrawn, still from the start of the run
-        Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, 4).putLong(Heater.PERIODIC_SINCE, time).commit()
+        Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, 4).commit()
+        Heater.planPeriodic(app)
         Heater.scheduleWake(app)
         assertEquals(start + 20 * 60_000, nextAlarm())
 
         // The last slot is 10 minutes before the end, then only the end check
-        Heater.prefs(app).edit().putLong(Heater.AUTO_SENT, start + 40 * 60_000).commit()
-        Heater.scheduleWake(app)
+        advance(start + 40 * 60_000 - time)
+        assertEquals("STATUS", lastSms())
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 60))
+        idle()
+        assertEquals(0L, Heater.prefs(app).getLong(Heater.AUTO_AT, 0))
         assertEquals(start + 50 * 60_000 + 6_000, nextAlarm())
     }
 
@@ -477,8 +483,17 @@ class UiTest {
         assertEquals(PHONE, Heater.prefs(app).getString(Heater.PHONE, ""))
     }
 
+    /** The timings in the tests are for a 30-minute run and a 6-second poll delay, not the defaults */
     private fun configure(periodic: Int = Heater.PERIODIC_AUTO) =
-        Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).putInt(Heater.PERIODIC_COUNT, periodic).commit()
+        Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).putInt(Heater.PERIODIC_COUNT, periodic)
+            .putInt(Heater.MINUTES, 30).putInt(Heater.POLL_DELAY, 6).commit()
+
+    /** Before the user moves them: a 20-minute run, STATUS 3 s after a command */
+    @Test fun defaults() {
+        assertEquals(20, Heater.minutes(app))
+        assertEquals(3_000L, Heater.pollDelay(app))
+        assertEquals(Heater.PERIODIC_AUTO, Heater.periodicSetting(app))
+    }
 
     private fun launch(): MainActivity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
 

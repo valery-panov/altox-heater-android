@@ -160,21 +160,17 @@ class SettingsActivity : Activity() {
             replyTimeout.error = "От ${Heater.REPLY_TIMEOUT_RANGE.first} до ${Heater.REPLY_TIMEOUT_RANGE.last} секунд"
             return
         }
-        val count = count()
-        val e = prefs.edit()
-        // Mid-run the new slots start from now, not from a slot already past
-        if (count != savedCount())
-            e.putLong(Heater.PERIODIC_SINCE, Heater.now())
-        e
+        prefs.edit()
             .putInt(Heater.REPLY_TIMEOUT, timeout)
             .putInt(Heater.POLL_DELAY, delay())
             .remove(Heater.PERIODIC)
-            .putInt(Heater.PERIODIC_COUNT, count)
+            .putInt(Heater.PERIODIC_COUNT, count())
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)
             .putString(Heater.PASSWORD, password.text.toString().trim())
             .commit()
         // Timeouts, the end check and the periodic STATUS are planned from these settings
+        Heater.planPeriodic(this)
         Heater.scheduleWake(this)
         finish()
     }
