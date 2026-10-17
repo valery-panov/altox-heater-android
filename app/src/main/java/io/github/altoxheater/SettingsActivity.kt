@@ -2,8 +2,11 @@ package io.github.altoxheater
 
 import android.Manifest
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.ContactsContract
 import android.text.Editable
 import android.text.TextWatcher
 import android.telephony.SubscriptionManager
@@ -13,17 +16,20 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 
 class SettingsActivity : Activity() {
     private lateinit var phone: EditText
     private lateinit var sim: RadioGroup
     private lateinit var password: EditText
     private lateinit var replyTimeout: EditText
-    private lateinit var pollDelay: EditText
+    private lateinit var pollDelay: SeekBar
+    private lateinit var pollDelayLabel: TextView
     private lateinit var periodic: CheckBox
     private lateinit var periodicLabel: TextView
-    private lateinit var periodicInterval: EditText
+    private lateinit var periodicCount: EditText
     private lateinit var saveButton: Button
 
     private val prefs by lazy { Heater.prefs(this) }
@@ -36,17 +42,21 @@ class SettingsActivity : Activity() {
         password = findViewById(R.id.password)
         replyTimeout = findViewById(R.id.replyTimeout)
         pollDelay = findViewById(R.id.pollDelay)
+        pollDelayLabel = findViewById(R.id.pollDelayLabel)
         periodic = findViewById(R.id.periodic)
         periodicLabel = findViewById(R.id.periodicLabel)
-        periodicInterval = findViewById(R.id.periodicInterval)
+        periodicCount = findViewById(R.id.periodicCount)
 
         phone.setText(prefs.getString(Heater.PHONE, ""))
         password.setText(prefs.getString(Heater.PASSWORD, ""))
         replyTimeout.setText(savedTimeout().toString())
-        pollDelay.setText(savedDelay().toString())
+        // Seconds over POLL_DELAY_RANGE.first
+        pollDelay.max = Heater.POLL_DELAY_RANGE.last - Heater.POLL_DELAY_RANGE.first
+        pollDelay.progress = savedDelay() - Heater.POLL_DELAY_RANGE.first
         periodic.isChecked = prefs.getBoolean(Heater.PERIODIC, false)
-        periodicInterval.setText(savedInterval().toString())
+        periodicCount.setText(savedCount().toString())
         findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
+        findViewById<ImageButton>(R.id.pickContact).setOnClickListener { pickContact() }
         saveButton = findViewById(R.id.save)
         saveButton.setOnClickListener { save() }
 
@@ -63,10 +73,14 @@ class SettingsActivity : Activity() {
         phone.addTextChangedListener(watcher)
         password.addTextChangedListener(watcher)
         replyTimeout.addTextChangedListener(watcher)
-        pollDelay.addTextChangedListener(watcher)
+        pollDelay.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = updateSave()
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
         sim.setOnCheckedChangeListener { _, _ -> updateSave() }
         periodic.setOnCheckedChangeListener { _, _ -> updateSave() }
-        periodicInterval.addTextChangedListener(watcher)
+        periodicCount.addTextChangedListener(watcher)
         updateSave()
     }
 
@@ -75,24 +89,29 @@ class SettingsActivity : Activity() {
             password.text.toString().trim() != prefs.getString(Heater.PASSWORD, "") ||
             sim.checkedRadioButtonId - ID_BASE != prefs.getInt(Heater.SIM_SLOT, -1) ||
             replyTimeout.text.toString().trim() != savedTimeout().toString() ||
-            pollDelay.text.toString().trim() != savedDelay().toString() ||
+            delay() != savedDelay() ||
             periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) ||
-            periodicInterval.text.toString().trim() != savedInterval().toString()
-        periodicInterval.isEnabled = periodic.isChecked
+            periodicCount.text.toString().trim() != savedCount().toString()
+        pollDelayLabel.text = "${delay()} с"
+        periodicCount.isEnabled = periodic.isChecked
         periodicLabel.text = periodicText()
     }
 
-    /** "22 минуты 12 секунд, это 2 SMS за цикл 50 мин плюс одна SMS в конце" */
+    /** "Раз в 16 минут 40 секунд за цикл 50 мин (выбран сейчас), плюс статус при пуске и в конце" */
     private fun periodicText(): String {
-        val run = Heater.minutes(this)
-        if (!periodic.isChecked) return "Только одна SMS в конце нагрева"
-        val s = interval() ?: return "Недопустимое значение - приемлемый интервал от ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last} сек"
+        if (!periodic.isChecked) return "Только статус при пуске и в конце"
+        val n = count() ?: return "Недопустимое значение - приемлемо от ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last}"
+        val run = Heater.periodicRun(this)
+        val heating = prefs.getString(Heater.STATE, Heater.OFF) == Heater.ON &&
+            prefs.getLong(Heater.RUN_TOTAL, 0) > 0
+        val s = (Heater.periodicStep(n, run) / 1000).toInt()
         val m = s / 60
         val time = listOfNotNull(
-            if (m > 0) "$m " + plural(m, "минута", "минуты", "минут") else null,
-            if (s % 60 > 0) "${s % 60} " + plural(s % 60, "секунда", "секунды", "секунд") else null,
+            if (m > 0) "$m " + plural(m, "минуту", "минуты", "минут") else null,
+            if (s % 60 > 0) "${s % 60} " + plural(s % 60, "секунду", "секунды", "секунд") else null,
         ).joinToString(" ")
-        return "$time, это ${Heater.periodicPerRun(s, run)} SMS за цикл $run мин плюс одна SMS в конце"
+        val cycle = if (heating) "текущий нагрев" else "выбран сейчас"
+        return "Раз в $time за цикл ${run / 60_000} мин ($cycle), плюс статус при пуске и в конце"
     }
 
     private fun plural(n: Int, one: String, few: String, many: String) = when {
@@ -104,9 +123,30 @@ class SettingsActivity : Activity() {
 
     private fun savedTimeout() = (Heater.replyTimeout(this) / 1000).toInt()
     private fun savedDelay() = (Heater.pollDelay(this) / 1000).toInt()
-    private fun savedInterval() = (Heater.periodicInterval(this) / 1000).toInt()
-    /** The typed interval, seconds; null if out of range */
-    private fun interval() = periodicInterval.text.toString().trim().toIntOrNull()?.takeIf { it in Heater.PERIODIC_RANGE }
+    private fun delay() = pollDelay.progress + Heater.POLL_DELAY_RANGE.first
+    private fun savedCount() = Heater.periodicCount(this)
+    /** The typed count; null if out of range */
+    private fun count() = periodicCount.text.toString().trim().toIntOrNull()?.takeIf { it in Heater.PERIODIC_RANGE }
+
+    private fun pickContact() {
+        val pick = Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
+        try {
+            startActivityForResult(pick, PICK_CONTACT)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Нет приложения контактов", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @Deprecated("Activity, not ComponentActivity: no result API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        val uri = data?.data
+        if (requestCode != PICK_CONTACT || resultCode != RESULT_OK || uri == null) return
+        val number = contentResolver.query(
+            uri, arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER), null, null, null,
+        )?.use { if (it.moveToFirst()) it.getString(0) else null } ?: return
+        phone.setText(cleanNumber(number))
+        phone.error = null
+    }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         fillSims()
@@ -142,29 +182,35 @@ class SettingsActivity : Activity() {
             replyTimeout.error = "От ${Heater.REPLY_TIMEOUT_RANGE.first} до ${Heater.REPLY_TIMEOUT_RANGE.last} секунд"
             return
         }
-        val delay = pollDelay.text.toString().trim().toIntOrNull()
-        if (delay == null || delay !in Heater.POLL_DELAY_RANGE) {
-            pollDelay.error = "От ${Heater.POLL_DELAY_RANGE.first} до ${Heater.POLL_DELAY_RANGE.last} секунд"
+        val count = count()
+        if (periodic.isChecked && count == null) {
+            periodicCount.error = "От ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last}"
             return
         }
-        val interval = interval()
-        if (periodic.isChecked && interval == null) {
-            periodicInterval.error = "От ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last} секунд"
-            return
-        }
-        prefs.edit()
+        val e = prefs.edit()
+        // Mid-run the new slots start from now, not from a slot already past
+        if (periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) || (count ?: savedCount()) != savedCount())
+            e.putLong(Heater.PERIODIC_SINCE, Heater.now())
+        e
             .putInt(Heater.REPLY_TIMEOUT, timeout)
-            .putInt(Heater.POLL_DELAY, delay)
+            .putInt(Heater.POLL_DELAY, delay())
             .putBoolean(Heater.PERIODIC, periodic.isChecked)
-            .putInt(Heater.PERIODIC_INTERVAL, interval ?: savedInterval())
+            .putInt(Heater.PERIODIC_COUNT, count ?: savedCount())
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)
             .putString(Heater.PASSWORD, password.text.toString().trim())
-            .apply()
+            .commit()
+        // Timeouts, the end check and the periodic STATUS are planned from these settings
+        Heater.scheduleWake(this)
         finish()
     }
 
     companion object {
         const val ID_BASE = 100
+        const val PICK_CONTACT = 1
+
+        /** "+7 (900) 123-45-67" -> "+79001234567" */
+        fun cleanNumber(number: String) =
+            (if (number.trim().startsWith("+")) "+" else "") + number.filter { it.isDigit() }
     }
 }

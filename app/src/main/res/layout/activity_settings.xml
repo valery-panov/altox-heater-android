@@ -38,12 +38,30 @@
 
         <TextView style="@style/Label" android:text="@string/phone" />
 
-        <EditText
-            android:id="@+id/phone"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="+79001234567"
-            android:inputType="phone" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/phone"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="+79001234567"
+                android:inputType="phone" />
+
+            <!-- Picks the number from the contacts: no permission needed, the picker grants this one -->
+            <ImageButton
+                android:id="@+id/pickContact"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="-12dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/pick_contact"
+                android:src="@drawable/ic_contacts" />
+        </LinearLayout>
 
         <TextView style="@style/Label" android:text="@string/sim" />
 
@@ -62,12 +80,30 @@
 
         <TextView style="@style/Label" android:text="@string/poll_delay" />
 
-        <EditText
-            android:id="@+id/pollDelay"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:inputType="number"
-            android:maxLength="2" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <SeekBar
+                android:id="@+id/pollDelay"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:progressDrawable="@drawable/slider_track"
+                android:thumb="@drawable/slider_thumb" />
+
+            <TextView
+                android:id="@+id/pollDelayLabel"
+                android:layout_width="56dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:textColor="@color/text"
+                android:textSize="16sp" />
+        </LinearLayout>
 
         <TextView style="@style/Label" android:text="@string/reply_timeout" />
 
@@ -87,14 +123,14 @@
             android:textColor="@color/text"
             android:textSize="16sp" />
 
-        <TextView style="@style/Label" android:text="@string/periodic_interval" />
+        <TextView style="@style/Label" android:text="@string/periodic_count" />
 
         <EditText
-            android:id="@+id/periodicInterval"
+            android:id="@+id/periodicCount"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="number"
-            android:maxLength="4" />
+            android:maxLength="2" />
 
         <TextView
             android:id="@+id/periodicLabel"

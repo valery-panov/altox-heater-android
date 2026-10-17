@@ -44,8 +44,9 @@ object Heater {
     val POLL_DELAY_RANGE = 3..60
     const val REPLY_TIMEOUT_DEFAULT = 60
     val REPLY_TIMEOUT_RANGE = 10..300
-    const val PERIODIC_DEFAULT = 600
-    val PERIODIC_RANGE = 30..3600
+    /** Periodic STATUS per run, evenly spread over it */
+    const val PERIODIC_DEFAULT = 2
+    val PERIODIC_RANGE = 1..20
     /** No periodic STATUS this close to the end of a run: the end has its own STATUS */
     const val END_QUIET = 60_000L
 
@@ -64,8 +65,9 @@ object Heater {
     const val MINUTES = "minutes" // run time for START, the slider on the main screen
     const val REPLY_TIMEOUT = "replyTimeout" // seconds, see replyTimeout()
     const val POLL_DELAY = "pollDelay" // seconds from a command to its STATUS
-    const val PERIODIC = "periodic" // STATUS every PERIODIC_INTERVAL while heating
-    const val PERIODIC_INTERVAL = "periodicInterval" // seconds, PERIODIC_RANGE
+    const val PERIODIC = "periodic" // PERIODIC_COUNT STATUS while heating
+    const val PERIODIC_COUNT = "periodicCount" // per run, PERIODIC_RANGE
+    const val PERIODIC_SINCE = "periodicSince" // the periodic settings changed: no slot before it
 
     // Command in progress
     const val STATE = "state"
@@ -112,20 +114,26 @@ object Heater {
     fun pollDelay(ctx: Context) =
         prefs(ctx).getInt(POLL_DELAY, POLL_DELAY_DEFAULT).coerceIn(POLL_DELAY_RANGE) * 1000L
 
-    /** Interval of the periodic STATUS while heating, ms; 0 if it is off */
-    fun periodic(ctx: Context): Long {
+    /** Periodic STATUS per run while heating; 0 if it is off */
+    fun periodic(ctx: Context): Int {
         val p = prefs(ctx)
         if (!p.getBoolean(PERIODIC, false)) return 0
-        return periodicInterval(ctx)
+        return periodicCount(ctx)
     }
 
-    /** The saved interval of the periodic STATUS, ms, whether it is on or not */
-    fun periodicInterval(ctx: Context) =
-        prefs(ctx).getInt(PERIODIC_INTERVAL, PERIODIC_DEFAULT).coerceIn(PERIODIC_RANGE) * 1000L
+    /** The saved count of the periodic STATUS, whether it is on or not */
+    fun periodicCount(ctx: Context) =
+        prefs(ctx).getInt(PERIODIC_COUNT, PERIODIC_DEFAULT).coerceIn(PERIODIC_RANGE)
 
-    /** Periodic STATUS per run of [minutes]: none in the last END_QUIET, see periodicAt() */
-    fun periodicPerRun(intervalSeconds: Int, minutes: Int) =
-        maxOf((minutes * 60_000L - END_QUIET - 1) / (intervalSeconds * 1000L), 0).toInt()
+    /** Time between periodic STATUS, ms: [count] of them split a run of [run] ms evenly */
+    fun periodicStep(count: Int, run: Long) = run / (count + 1)
+
+    /** The run the periodic STATUS are spread over, ms: the current one, or the slider's if unknown */
+    fun periodicRun(ctx: Context): Long {
+        val p = prefs(ctx)
+        val total = p.getLong(RUN_TOTAL, 0)
+        return if (p.getString(STATE, OFF) == ON && total > 0) total else minutes(ctx) * 60_000L
+    }
 
     /** How long to wait for a reply to STATUS, ms */
     fun replyTimeout(ctx: Context) =
@@ -208,14 +216,25 @@ object Heater {
         ).minOrNull() ?: 0
     }
 
-    /** When the next periodic STATUS is due: an interval after the last status or request */
+    /**
+     * When the next periodic STATUS is due. The run is split into count + 1 equal steps, a STATUS
+     * at each inner point. A slot is skipped if it is not after the last periodic STATUS or the
+     * last change of these settings (so changing them mid-run never sends at once), or if a reply
+     * came less than half a step before it. Without a known end the steps go on, from the slider
+     */
     private fun periodicAt(ctx: Context): Long {
-        val interval = periodic(ctx)
-        if (interval == 0L) return 0
+        val count = periodic(ctx)
+        if (count == 0) return 0
         val p = prefs(ctx)
-        val at = maxOf(p.getLong(STATUS_TIME, 0), p.getLong(AUTO_SENT, 0), p.getLong(ON_SINCE, 0)) + interval
         val endsAt = p.getLong(ENDS_AT, 0)
-        return if (endsAt > 0 && at > endsAt - END_QUIET) 0 else at
+        val total = p.getLong(RUN_TOTAL, 0)
+        val step = periodicStep(count, periodicRun(ctx)).coerceAtLeast(1)
+        // A run started again after its end keeps ON_SINCE, ENDS_AT - RUN_TOTAL is its start
+        val start = if (endsAt > 0 && total > 0) endsAt - total else p.getLong(ON_SINCE, 0)
+        val after = maxOf(start, p.getLong(AUTO_SENT, 0), p.getLong(PERIODIC_SINCE, 0),
+            p.getLong(STATUS_TIME, 0) + step / 2 - 1)
+        val at = start + ((after - start) / step + 1) * step
+        return if (endsAt > 0 && at > endsAt - minOf(END_QUIET, step / 2)) 0 else at
     }
 
     /**
@@ -231,7 +250,7 @@ object Heater {
      * Wakes tick() up through PollReceiver at nextWake(), so commands go on while the app is
      * closed; while it is open, MainActivity calls tick() itself
      */
-    private fun scheduleWake(ctx: Context) {
+    fun scheduleWake(ctx: Context) {
         val am = ctx.getSystemService(AlarmManager::class.java)
         val pi = PendingIntent.getBroadcast(
             ctx, 0, Intent(ctx, PollReceiver::class.java),
