@@ -41,7 +41,7 @@ object Heater {
 
     /** Settings' defaults and ranges, seconds */
     const val POLL_DELAY_DEFAULT = 6
-    val POLL_DELAY_RANGE = 3..60
+    val POLL_DELAY_RANGE = 1..30
     const val REPLY_TIMEOUT_DEFAULT = 60
     val REPLY_TIMEOUT_RANGE = 10..300
     /** Periodic STATUS per run, evenly spread over it */

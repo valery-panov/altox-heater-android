@@ -10,7 +10,7 @@
     <string name="reply_timeout">Таймаут ожидания ответа от Altox, с (10–300)</string>
     <string name="poll_delay">Задержка опроса отопителя после отправки команды</string>
     <string name="periodic">Опрашивать отопитель, пока он включён (температура, бортсеть)</string>
-    <string name="periodic_count">Опросов за цикл нагрева (1–20)</string>
+    <string name="periodic_count">Опросов за цикл нагрева, кроме статуса после пуска и в конце</string>
     <string name="pick_contact">Выбрать из контактов</string>
     <string name="back">Назад</string>
     <string name="save">Сохранить</string>

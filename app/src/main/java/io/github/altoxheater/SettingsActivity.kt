@@ -29,7 +29,8 @@ class SettingsActivity : Activity() {
     private lateinit var pollDelayLabel: TextView
     private lateinit var periodic: CheckBox
     private lateinit var periodicLabel: TextView
-    private lateinit var periodicCount: EditText
+    private lateinit var periodicCount: SeekBar
+    private lateinit var periodicCountLabel: TextView
     private lateinit var saveButton: Button
 
     private val prefs by lazy { Heater.prefs(this) }
@@ -46,15 +47,17 @@ class SettingsActivity : Activity() {
         periodic = findViewById(R.id.periodic)
         periodicLabel = findViewById(R.id.periodicLabel)
         periodicCount = findViewById(R.id.periodicCount)
+        periodicCountLabel = findViewById(R.id.periodicCountLabel)
 
         phone.setText(prefs.getString(Heater.PHONE, ""))
         password.setText(prefs.getString(Heater.PASSWORD, ""))
         replyTimeout.setText(savedTimeout().toString())
-        // Seconds over POLL_DELAY_RANGE.first
+        // Sliders count from the range's first value
         pollDelay.max = Heater.POLL_DELAY_RANGE.last - Heater.POLL_DELAY_RANGE.first
         pollDelay.progress = savedDelay() - Heater.POLL_DELAY_RANGE.first
+        periodicCount.max = Heater.PERIODIC_RANGE.last - Heater.PERIODIC_RANGE.first
+        periodicCount.progress = savedCount() - Heater.PERIODIC_RANGE.first
         periodic.isChecked = prefs.getBoolean(Heater.PERIODIC, false)
-        periodicCount.setText(savedCount().toString())
         findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
         findViewById<ImageButton>(R.id.pickContact).setOnClickListener { pickContact() }
         saveButton = findViewById(R.id.save)
@@ -73,14 +76,15 @@ class SettingsActivity : Activity() {
         phone.addTextChangedListener(watcher)
         password.addTextChangedListener(watcher)
         replyTimeout.addTextChangedListener(watcher)
-        pollDelay.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        val slider = object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = updateSave()
             override fun onStartTrackingTouch(bar: SeekBar?) {}
             override fun onStopTrackingTouch(bar: SeekBar?) {}
-        })
+        }
+        pollDelay.setOnSeekBarChangeListener(slider)
+        periodicCount.setOnSeekBarChangeListener(slider)
         sim.setOnCheckedChangeListener { _, _ -> updateSave() }
         periodic.setOnCheckedChangeListener { _, _ -> updateSave() }
-        periodicCount.addTextChangedListener(watcher)
         updateSave()
     }
 
@@ -91,16 +95,21 @@ class SettingsActivity : Activity() {
             replyTimeout.text.toString().trim() != savedTimeout().toString() ||
             delay() != savedDelay() ||
             periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) ||
-            periodicCount.text.toString().trim() != savedCount().toString()
+            count() != savedCount()
         pollDelayLabel.text = "${delay()} с"
+        periodicCountLabel.text = count().toString()
         periodicCount.isEnabled = periodic.isChecked
+        periodicCountLabel.isEnabled = periodic.isChecked
         periodicLabel.text = periodicText()
     }
 
-    /** "Раз в 16 минут 40 секунд за цикл 50 мин (выбран сейчас), плюс статус при пуске и в конце" */
+    /**
+     * "Раз в 16 минут 40 секунд за цикл 50 мин (выбран сейчас)
+     * Всего за цикл 5 SMS: пуск, статус после пуска, 2 опроса, статус в конце"
+     */
     private fun periodicText(): String {
-        if (!periodic.isChecked) return "Только статус при пуске и в конце"
-        val n = count() ?: return "Недопустимое значение - приемлемо от ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last}"
+        if (!periodic.isChecked) return "Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце"
+        val n = count()
         val run = Heater.periodicRun(this)
         val heating = prefs.getString(Heater.STATE, Heater.OFF) == Heater.ON &&
             prefs.getLong(Heater.RUN_TOTAL, 0) > 0
@@ -111,7 +120,9 @@ class SettingsActivity : Activity() {
             if (s % 60 > 0) "${s % 60} " + plural(s % 60, "секунду", "секунды", "секунд") else null,
         ).joinToString(" ")
         val cycle = if (heating) "текущий нагрев" else "выбран сейчас"
-        return "Раз в $time за цикл ${run / 60_000} мин ($cycle), плюс статус при пуске и в конце"
+        return "Раз в $time за цикл ${run / 60_000} мин ($cycle)\n" +
+            "Всего за цикл ${n + 3} SMS: пуск, статус после пуска, $n\u00A0" +
+            plural(n, "опрос", "опроса", "опросов") + ", статус в конце"
     }
 
     private fun plural(n: Int, one: String, few: String, many: String) = when {
@@ -125,8 +136,7 @@ class SettingsActivity : Activity() {
     private fun savedDelay() = (Heater.pollDelay(this) / 1000).toInt()
     private fun delay() = pollDelay.progress + Heater.POLL_DELAY_RANGE.first
     private fun savedCount() = Heater.periodicCount(this)
-    /** The typed count; null if out of range */
-    private fun count() = periodicCount.text.toString().trim().toIntOrNull()?.takeIf { it in Heater.PERIODIC_RANGE }
+    private fun count() = periodicCount.progress + Heater.PERIODIC_RANGE.first
 
     private fun pickContact() {
         val pick = Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
@@ -183,19 +193,15 @@ class SettingsActivity : Activity() {
             return
         }
         val count = count()
-        if (periodic.isChecked && count == null) {
-            periodicCount.error = "От ${Heater.PERIODIC_RANGE.first} до ${Heater.PERIODIC_RANGE.last}"
-            return
-        }
         val e = prefs.edit()
         // Mid-run the new slots start from now, not from a slot already past
-        if (periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) || (count ?: savedCount()) != savedCount())
+        if (periodic.isChecked != prefs.getBoolean(Heater.PERIODIC, false) || count != savedCount())
             e.putLong(Heater.PERIODIC_SINCE, Heater.now())
         e
             .putInt(Heater.REPLY_TIMEOUT, timeout)
             .putInt(Heater.POLL_DELAY, delay())
             .putBoolean(Heater.PERIODIC, periodic.isChecked)
-            .putInt(Heater.PERIODIC_COUNT, count ?: savedCount())
+            .putInt(Heater.PERIODIC_COUNT, count)
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)
             .putString(Heater.PASSWORD, password.text.toString().trim())

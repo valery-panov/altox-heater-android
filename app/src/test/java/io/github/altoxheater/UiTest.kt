@@ -253,25 +253,23 @@ class UiTest {
         val delay = a.findViewById<SeekBar>(R.id.pollDelay)
         assertEquals("6 с", text(a, R.id.pollDelayLabel))
         delay.progress = 60
-        assertEquals("60 с", text(a, R.id.pollDelayLabel))
+        assertEquals("30 с", text(a, R.id.pollDelayLabel))
         delay.progress = 12
-        assertEquals("15 с", text(a, R.id.pollDelayLabel))
-        assertEquals("Только статус при пуске и в конце", text(a, R.id.periodicLabel))
+        assertEquals("13 с", text(a, R.id.pollDelayLabel))
+        assertEquals("Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце", text(a, R.id.periodicLabel))
         a.findViewById<android.widget.CheckBox>(R.id.periodic).isChecked = true
-        val count = a.findViewById<android.widget.EditText>(R.id.periodicCount)
-        assertEquals("2", count.text.toString())
-        assertEquals("Раз в 10 минут за цикл 30 мин (выбран сейчас), плюс статус при пуске и в конце", text(a, R.id.periodicLabel))
-        count.setText("3")
-        assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран сейчас), плюс статус при пуске и в конце", text(a, R.id.periodicLabel))
-        count.setText("1")
-        assertEquals("Раз в 15 минут за цикл 30 мин (выбран сейчас), плюс статус при пуске и в конце", text(a, R.id.periodicLabel))
-        count.setText("20")
-        assertEquals("Раз в 1 минуту 25 секунд за цикл 30 мин (выбран сейчас), плюс статус при пуске и в конце", text(a, R.id.periodicLabel))
-        count.setText("21")
-        assertEquals("Недопустимое значение - приемлемо от 1 до 20", text(a, R.id.periodicLabel))
-        save.performClick()
-        assertFalse(a.isFinishing) // out of range
-        count.setText("3")
+        val count = a.findViewById<SeekBar>(R.id.periodicCount)
+        assertEquals("2", text(a, R.id.periodicCountLabel))
+        assertEquals("Раз в 10 минут за цикл 30 мин (выбран сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        shot(a, "12-settings-periodic")
+        count.progress = 2
+        assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        count.progress = 0
+        assertEquals("Раз в 15 минут за цикл 30 мин (выбран сейчас)\nВсего за цикл 4 SMS: пуск, статус после пуска, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
+        count.progress = 30
+        assertEquals("20", text(a, R.id.periodicCountLabel))
+        assertEquals("Раз в 1 минуту 25 секунд за цикл 30 мин (выбран сейчас)\nВсего за цикл 23 SMS: пуск, статус после пуска, 20\u00A0опросов, статус в конце", text(a, R.id.periodicLabel))
+        count.progress = 2
         timeout.setText("5")
         save.performClick()
         assertFalse(a.isFinishing) // out of range
@@ -279,7 +277,7 @@ class UiTest {
         save.performClick()
         assertEquals("+79001112233", Heater.prefs(app).getString(Heater.PHONE, ""))
         assertEquals(45_000L, Heater.replyTimeout(app))
-        assertEquals(15_000L, Heater.pollDelay(app))
+        assertEquals(13_000L, Heater.pollDelay(app))
         assertEquals(3, Heater.periodic(app))
         assertTrue(a.isFinishing)
     }
@@ -300,8 +298,8 @@ class UiTest {
         advance(start + 12 * 60_000 + 1_000 - time) // the 12-minute slot of 9 per run has just passed
         val s = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
         s.findViewById<android.widget.CheckBox>(R.id.periodic).isChecked = true
-        s.findViewById<android.widget.EditText>(R.id.periodicCount).setText("9")
-        assertEquals("Раз в 5 минут за цикл 50 мин (текущий нагрев), плюс статус при пуске и в конце", text(s, R.id.periodicLabel))
+        s.findViewById<SeekBar>(R.id.periodicCount).progress = 8
+        assertEquals("Раз в 5 минут за цикл 50 мин (текущий нагрев)\nВсего за цикл 12 SMS: пуск, статус после пуска, 9\u00A0опросов, статус в конце", text(s, R.id.periodicLabel))
         s.findViewById<android.widget.Button>(R.id.save).performClick()
         assertTrue(s.isFinishing)
         assertEquals(start + 15 * 60_000, nextAlarm())
