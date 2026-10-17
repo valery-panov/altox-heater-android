@@ -64,7 +64,7 @@ class UiTest {
         assertEquals("", power(a).sub)
         assertEquals("Время работы", text(a, R.id.minutesTitle))
         assertEquals("30 мин", text(a, R.id.minutesLabel))
-        assertEquals("Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 3 SMS (пуск, статус после пуска, статус в конце).", text(a, R.id.smsLabel))
         shot(a, "02-idle")
 
         power(a).performClick()
@@ -208,9 +208,9 @@ class UiTest {
         shadowOf(bar).onSeekBarChangeListener.onProgressChanged(bar, Heater.RUN_MINUTES.indexOf(90) * MainActivity.STEP + 20, true)
         idle()
         assertEquals("90 мин", text(a, R.id.minutesLabel))
-        assertEquals("Раз в 30 минут за цикл 90 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 5 SMS (пуск, статус после пуска, 2\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
         shot(a, "14-slider-sms")
-        assertEquals("Раз в 30 минут за цикл 90 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 5 SMS (пуск, статус после пуска, 2\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
         shot(a, "14-slider-sms")
         power(a).performClick()
         assertEquals("START:90", lastSms())
@@ -413,7 +413,7 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
         idle()
         assertEquals(start + 300_000, nextAlarm()) // 5 per 30 minutes: the run in 6 steps
-        assertEquals("Раз в 5 минут за цикл 30 мин (текущий\u00A0нагрев)\nВсего за цикл 8 SMS: пуск, статус после пуска, 5\u00A0опросов, статус в конце", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 8 SMS (пуск, статус после пуска, 5\u00A0опросов, статус в конце).", text(a, R.id.smsLabel))
 
         advance(300_000)
         assertEquals("STATUS", lastSms())

@@ -150,6 +150,12 @@ object Heater {
             plural(count, "опрос", "опроса", "опросов") + ", статус в конце"
     }
 
+    /** Under the run slider: "Будет отправлено 5 SMS (пуск, статус после пуска, 2 опроса, статус в конце)." */
+    fun smsText(count: Int): String {
+        val polls = if (count > 0) "$count\u00A0" + plural(count, "опрос", "опроса", "опросов") + ", " else ""
+        return "Будет отправлено ${smsPerRun(count)} SMS (пуск, статус после пуска, ${polls}статус в конце)."
+    }
+
     private fun plural(n: Int, one: String, few: String, many: String) = when {
         n % 100 in 11..14 -> many
         n % 10 == 1 -> one

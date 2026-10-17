@@ -170,7 +170,7 @@ class MainActivity : Activity() {
         }
 
         smsLabel.visibility = if (configured) View.VISIBLE else View.INVISIBLE
-        smsLabel.text = Heater.periodicText(this, Heater.periodic(this))
+        smsLabel.text = Heater.smsText(Heater.periodic(this))
 
         val time = prefs.getLong(Heater.STATUS_TIME, 0)
         statusBlock.visibility = if (time == 0L) View.INVISIBLE else View.VISIBLE
