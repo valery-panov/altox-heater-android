@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.altoxheater"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "1.16"
+        versionCode = 18
+        versionName = "1.17"
     }
 
     // The key and its password are not in git, see build.sh

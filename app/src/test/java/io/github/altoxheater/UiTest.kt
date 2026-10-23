@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.Application
+import android.content.DialogInterface
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -23,6 +24,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowAlertDialog
 import java.io.File
 import java.time.Duration
 
@@ -321,11 +323,24 @@ class UiTest {
         assertEquals("2 мин", text(a, R.id.flameDelayLabel))
         assertEquals("Раз в 14 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, статус пламени, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
 
-        // System sounds: the picker's choice, silence included
+        // Sounds from our own list: silence, the app's, then the phone's
+        assertEquals("Колокольчик", text(a, R.id.finishSound))
+        assertEquals("Тревога", text(a, R.id.errorSound))
+        a.findViewById<android.widget.TextView>(R.id.errorSound).performClick()
+        var dialog = ShadowAlertDialog.getLatestAlertDialog()
+        val items = (0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() }
+        assertEquals(listOf("Без звука", "Тревога", "Сирена", "Зуммер"), items.take(4))
+        assertEquals(1, dialog.listView.checkedItemPosition)
+        dialog.listView.performItemClick(null, 2, 2) // plays it
+        shot(dialog.window!!.decorView, "12-settings-sound")
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+        idle()
+        assertEquals("Сирена", text(a, R.id.errorSound))
         a.findViewById<android.widget.TextView>(R.id.finishSound).performClick()
-        val pick = shadowOf(a).nextStartedActivityForResult
-        assertEquals(android.media.RingtoneManager.ACTION_RINGTONE_PICKER, pick.intent.action)
-        shadowOf(a).receiveResult(pick.intent, Activity.RESULT_OK, Intent())
+        dialog = ShadowAlertDialog.getLatestAlertDialog()
+        dialog.listView.performItemClick(null, 0, 0)
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+        idle()
         assertEquals("Без звука", text(a, R.id.finishSound))
         timeout.setText("5")
         save.performClick()
@@ -336,7 +351,7 @@ class UiTest {
         assertEquals(45_000L, Heater.replyTimeout(app))
         assertEquals(120_000L, Heater.flameDelay(app))
         assertEquals(null, Heater.sound(app, Heater.FINISH_SOUND))
-        assertEquals(Heater.defaultSound(Heater.ERROR_SOUND), Heater.sound(app, Heater.ERROR_SOUND))
+        assertEquals(Heater.ownSounds(app, Heater.ERROR_SOUND)[1].first, Heater.sound(app, Heater.ERROR_SOUND))
         assertEquals(Heater.PERIODIC_AUTO, Heater.periodicSetting(app))
         assertEquals(1, Heater.periodic(app))
         assertTrue(a.isFinishing)
@@ -699,6 +714,17 @@ class UiTest {
         Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).putInt(Heater.PERIODIC_COUNT, periodic)
             .putInt(Heater.MINUTES, 30).commit()
 
+    /** The app's sounds are in the APK under the names their saved URIs point to */
+    @Test fun ownSounds() {
+        for (key in listOf(Heater.FINISH_SOUND, Heater.ERROR_SOUND)) {
+            for ((uri, _) in Heater.ownSounds(app, key)) {
+                assertTrue("$uri", uri.toString().startsWith("android.resource://io.github.altoxheater/raw/"))
+                app.contentResolver.openInputStream(uri)!!.use { assertTrue(it.read() >= 0) }
+            }
+        }
+        assertEquals("finish_chime", Heater.sound(app, Heater.FINISH_SOUND)!!.lastPathSegment)
+    }
+
     /** Before the user moves them: a 20-minute run, flame STATUS 4 min after START */
     @Test fun defaults() {
         assertEquals(20, Heater.minutes(app))
@@ -739,9 +765,10 @@ class UiTest {
         www.altox.ru
     """.trimIndent()
 
-    private fun shot(a: Activity, name: String) {
+    private fun shot(a: Activity, name: String) = shot(a.window.decorView, name)
+
+    private fun shot(v: android.view.View, name: String) {
         idle()
-        val v = a.window.decorView
         val b = Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888)
         v.draw(Canvas(b))
         val dir = File("build/screenshots").apply { mkdirs() }

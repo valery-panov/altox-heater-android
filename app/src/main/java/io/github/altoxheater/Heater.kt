@@ -8,10 +8,10 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
-import android.provider.Settings
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import kotlin.math.abs
@@ -82,7 +82,7 @@ object Heater {
     const val MINUTES = "minutes" // run time for START, the slider on the main screen
     const val REPLY_TIMEOUT = "replyTimeout" // seconds, see replyTimeout()
     const val FLAME_DELAY = "flameDelay" // minutes from START to the flame STATUS
-    const val FINISH_SOUND = "finishSound" // ringtone URI, "" silent, missing: the default one
+    const val FINISH_SOUND = "finishSound" // ringtone URI, "" silent, missing: the first of ownSounds()
     const val ERROR_SOUND = "errorSound"
     const val PERIODIC = "periodic" // before v1.14: a checkbox, PERIODIC_COUNT only while it was on
     const val PERIODIC_COUNT = "periodicCount" // per run: 0, PERIODIC_RANGE or PERIODIC_AUTO
@@ -453,12 +453,35 @@ object Heater {
     /** The ringtone saved in [key] (FINISH_SOUND or ERROR_SOUND); null: silent */
     fun sound(ctx: Context, key: String): Uri? {
         val p = prefs(ctx)
-        if (!p.contains(key)) return defaultSound(key)
+        if (!p.contains(key)) return defaultSound(ctx, key)
         return p.getString(key, "").takeUnless { it.isNullOrEmpty() }?.let(Uri::parse)
     }
 
-    fun defaultSound(key: String): Uri =
-        if (key == ERROR_SOUND) Settings.System.DEFAULT_ALARM_ALERT_URI else Settings.System.DEFAULT_NOTIFICATION_URI
+    fun defaultSound(ctx: Context, key: String): Uri = ownSounds(ctx, key).first().first
+
+    /** The app's sounds for [key] with their titles, from res/raw (made by tools/make_sounds.py) */
+    fun ownSounds(ctx: Context, key: String): List<Pair<Uri, String>> {
+        val sounds = if (key == ERROR_SOUND)
+            listOf(R.raw.error_alarm to "Тревога", R.raw.error_siren to "Сирена", R.raw.error_buzzer to "Зуммер")
+        else
+            listOf(R.raw.finish_chime to "Колокольчик", R.raw.finish_arpeggio to "Аккорд", R.raw.finish_ready to "Три сигнала")
+        // By name, not by id: the saved URI has to survive the next build
+        return sounds.map { (id, title) ->
+            Uri.parse("android.resource://${ctx.packageName}/raw/${ctx.resources.getResourceEntryName(id)}") to title
+        }
+    }
+
+    /** [uri] ready to play as [key]'s sound: the error one as an alarm, heard in silent mode too */
+    fun ringtone(ctx: Context, uri: Uri, key: String): Ringtone? = try {
+        RingtoneManager.getRingtone(ctx, uri)?.apply {
+            audioAttributes = AudioAttributes.Builder()
+                .setUsage(if (key == ERROR_SOUND) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+        }
+    } catch (e: Exception) {
+        null
+    }
 
     /** Plays the sound once; replaced in tests */
     var play: (Context, String) -> Unit = ::ring
@@ -467,12 +490,7 @@ object Heater {
     private fun ring(ctx: Context, key: String) {
         val uri = sound(ctx, key) ?: return
         try {
-            val r = RingtoneManager.getRingtone(ctx, uri) ?: return
-            r.audioAttributes = AudioAttributes.Builder()
-                .setUsage(if (key == ERROR_SOUND) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_NOTIFICATION_EVENT)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            r.play()
+            ringtone(ctx, uri, key)?.play()
         } catch (e: Exception) {
         }
     }

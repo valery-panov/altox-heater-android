@@ -2,9 +2,11 @@ package io.github.altoxheater
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
@@ -127,6 +129,8 @@ class SettingsActivity : Activity() {
 
     private fun soundTitle(uri: String): String {
         if (uri.isEmpty()) return "Без звука"
+        Heater.ownSounds(this, Heater.FINISH_SOUND).plus(Heater.ownSounds(this, Heater.ERROR_SOUND))
+            .firstOrNull { it.first.toString() == uri }?.let { return it.second }
         return try {
             RingtoneManager.getRingtone(this, Uri.parse(uri))?.getTitle(this)
         } catch (e: Exception) {
@@ -134,23 +138,46 @@ class SettingsActivity : Activity() {
         } ?: "Системный звук"
     }
 
-    /** The system's sound picker: notification sounds for the finish, alarm ones for the error */
+    /**
+     * The sounds to pick from, in our own list (the system's picker may be another app, with ads):
+     * silence, the app's sounds, then the phone's notification and alarm sounds. A tap plays it
+     */
     private fun pickSound(key: String) {
-        val current = if (key == Heater.ERROR_SOUND) errorUri else finishUri
-        val pick = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE,
-                if (key == Heater.ERROR_SOUND) RingtoneManager.TYPE_ALARM else RingtoneManager.TYPE_NOTIFICATION)
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE,
-                getString(if (key == Heater.ERROR_SOUND) R.string.error_sound else R.string.finish_sound))
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, Heater.defaultSound(key))
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, if (current.isEmpty()) null else Uri.parse(current))
-        try {
-            startActivityForResult(pick, if (key == Heater.ERROR_SOUND) PICK_ERROR_SOUND else PICK_FINISH_SOUND)
-        } catch (e: ActivityNotFoundException) {
-            Toast.makeText(this, "Нет выбора звуков", Toast.LENGTH_SHORT).show()
+        val error = key == Heater.ERROR_SOUND
+        val current = if (error) errorUri else finishUri
+        val options = (listOf("" to "Без звука") +
+            Heater.ownSounds(this, key).map { it.first.toString() to it.second } +
+            systemSounds()).distinctBy { it.first }.toMutableList()
+        if (options.none { it.first == current }) options.add(1, current to soundTitle(current))
+        var chosen = options.indexOfFirst { it.first == current }
+        var preview: Ringtone? = null
+        AlertDialog.Builder(this)
+            .setTitle(if (error) R.string.error_sound else R.string.finish_sound)
+            .setSingleChoiceItems(options.map { it.second }.toTypedArray(), chosen) { _, i ->
+                chosen = i
+                preview?.stop()
+                preview = options[i].first.takeIf { it.isNotEmpty() }?.let { Heater.ringtone(this, Uri.parse(it), key) }
+                preview?.play()
+            }
+            .setPositiveButton("Выбрать") { _, _ ->
+                if (error) errorUri = options[chosen].first else finishUri = options[chosen].first
+                updateSave()
+            }
+            .setNegativeButton("Отмена", null)
+            .setOnDismissListener { preview?.stop() }
+            .show()
+    }
+
+    /** The phone's notification and alarm sounds; none if it does not list them */
+    private fun systemSounds(): List<Pair<String, String>> = try {
+        val m = RingtoneManager(this).apply { setType(RingtoneManager.TYPE_NOTIFICATION or RingtoneManager.TYPE_ALARM) }
+        val c = m.cursor
+        (0 until c.count).mapNotNull { i ->
+            c.moveToPosition(i)
+            m.getRingtoneUri(i)?.let { it.toString() to c.getString(RingtoneManager.TITLE_COLUMN_INDEX) }
         }
+    } catch (e: Exception) {
+        emptyList()
     }
 
     private fun pickContact() {
@@ -164,14 +191,6 @@ class SettingsActivity : Activity() {
 
     @Deprecated("Activity, not ComponentActivity: no result API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode == PICK_FINISH_SOUND || requestCode == PICK_ERROR_SOUND) {
-            if (resultCode != RESULT_OK || data == null) return
-            @Suppress("DEPRECATION")
-            val picked = data.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)?.toString().orEmpty()
-            if (requestCode == PICK_ERROR_SOUND) errorUri = picked else finishUri = picked
-            updateSave()
-            return
-        }
         val uri = data?.data
         if (requestCode != PICK_CONTACT || resultCode != RESULT_OK || uri == null) return
         val number = contentResolver.query(
@@ -235,8 +254,6 @@ class SettingsActivity : Activity() {
     companion object {
         const val ID_BASE = 100
         const val PICK_CONTACT = 1
-        const val PICK_FINISH_SOUND = 2
-        const val PICK_ERROR_SOUND = 3
 
         /** "+7 (900) 123-45-67" -> "+79001234567" */
         fun cleanNumber(number: String) =
