@@ -78,7 +78,7 @@
             android:layout_height="wrap_content"
             android:inputType="text" />
 
-        <TextView style="@style/Label" android:text="@string/poll_delay" />
+        <TextView style="@style/Label" android:text="@string/flame_delay" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -87,7 +87,7 @@
             android:orientation="horizontal">
 
             <SeekBar
-                android:id="@+id/pollDelay"
+                android:id="@+id/flameDelay"
                 android:layout_width="0dp"
                 android:layout_height="48dp"
                 android:layout_weight="1"
@@ -99,7 +99,7 @@
                 android:thumbTint="@color/slider_tint" />
 
             <TextView
-                android:id="@+id/pollDelayLabel"
+                android:id="@+id/flameDelayLabel"
                 android:layout_width="56dp"
                 android:layout_height="wrap_content"
                 android:gravity="end"
@@ -149,6 +149,19 @@
             android:id="@+id/periodicLabel"
             style="@style/Label"
             android:layout_marginTop="4dp" />
+
+        <!-- Tap: the system's sound picker -->
+        <TextView style="@style/Label" android:text="@string/finish_sound" />
+
+        <TextView
+            android:id="@+id/finishSound"
+            style="@style/SoundPicker" />
+
+        <TextView style="@style/Label" android:text="@string/error_sound" />
+
+        <TextView
+            android:id="@+id/errorSound"
+            style="@style/SoundPicker" />
 
         <Button
             android:id="@+id/save"

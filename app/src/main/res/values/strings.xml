@@ -8,8 +8,10 @@
     <string name="sim_default">По умолчанию для SMS</string>
     <string name="password">Пароль модуля (если задан командой PASS)</string>
     <string name="reply_timeout">Таймаут ожидания ответа от Altox, с (10–300)</string>
-    <string name="poll_delay">Задержка опроса отопителя после отправки команды</string>
-    <string name="periodic_count">Опросов за цикл нагрева (температура, бортсеть), кроме статуса после пуска и в конце. Авто: 1 для 10–20 мин, 2 для 21–35, 3 для 36–49, 4 для 50–120</string>
+    <string name="flame_delay">Время выхода отопителя в режим Flame: Yes</string>
+    <string name="finish_sound">Звук завершения нагрева</string>
+    <string name="error_sound">Звук ошибки (отопитель не выключился)</string>
+    <string name="periodic_count">Опросов за цикл нагрева (температура, бортсеть), кроме статусов после пуска, пламени и в конце. Авто: 0 для 10–20 мин, 1 для 21–35, 2 для 36–49, 3 для 50–120</string>
     <string name="pick_contact">Выбрать из контактов</string>
     <string name="back">Назад</string>
     <string name="save">Сохранить</string>

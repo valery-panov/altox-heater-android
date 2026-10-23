@@ -37,10 +37,12 @@ import java.time.Duration
 class UiTest {
     private val app: Application = RuntimeEnvironment.getApplication()
     private var time = 0L
+    private val sounds = mutableListOf<String>()
 
     @Before fun setUp() {
         time = System.currentTimeMillis()
         Heater.clock = { time }
+        Heater.play = { _, key -> sounds += key }
         shadowOf(app).grantPermissions(
             Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_PHONE_STATE,
         )
@@ -64,7 +66,7 @@ class UiTest {
         assertEquals("", power(a).sub)
         assertEquals("Время работы", text(a, R.id.minutesTitle))
         assertEquals("30 мин", text(a, R.id.minutesLabel))
-        assertEquals("Будет отправлено 3 SMS (пуск, статус после пуска, статус в конце).", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 4 SMS (пуск, статус после пуска, статус пламени, статус в конце).", text(a, R.id.smsLabel))
         shot(a, "02-idle")
 
         power(a).performClick()
@@ -77,17 +79,19 @@ class UiTest {
         shot(a, "03-starting-sending")
 
         Heater.commandSent(app)
-        advance(3_000)
-        assertEquals("статус через\n3 с", power(a).sub)
+        advance(300)
+        assertEquals("статус через\n1 с", power(a).sub)
         shot(a, "04-starting-countdown")
 
-        advance(3_500)
+        advance(1_000)
         assertEquals("STATUS", lastSms())
         assertTrue(power(a).sub.startsWith("ждём ответ"))
         shot(a, "05-starting-waiting")
 
-        Heater.onReply(app, reply(on = true, flame = true, coolant = 41))
-        advance(192_500 - 6_500) // 3 min 12.5 s since START left
+        // On, not burning yet: the flame flickers until the flame STATUS
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 8))
+        advance(192_500 - 1_300) // 3 min 12.5 s since START left
+        assertEquals("Розжиг", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
         assertEquals("Стоп", power(a).label)
         assertEquals("", power(a).sub)
         assertEquals("Осталось", text(a, R.id.minutesTitle))
@@ -98,12 +102,20 @@ class UiTest {
         assertTrue(power(a).isEnabled)
         shot(a, "06-on")
 
+        advance(240_000 - 192_500)
+        assertEquals("STATUS", lastSms())
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 41))
+        idle()
+        assertEquals("Пламя есть", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals("", text(a, R.id.message))
+        shot(a, "06-on-flame")
+
         power(a).performClick()
         idle()
         assertEquals("STOP", lastSms())
         assertEquals("Остановка...", power(a).label)
         Heater.commandSent(app)
-        advance(8_500)
+        advance(1_500)
         assertEquals("STATUS", lastSms())
         shot(a, "07-stopping-waiting")
 
@@ -111,6 +123,7 @@ class UiTest {
         idle()
         assertEquals("Пуск", power(a).label)
         assertEquals("Нагрев выключен", a.findViewById<android.widget.TextView>(R.id.caption).text)
+        assertEquals(listOf<String>(), sounds) // our own Stop: no sound
         shot(a, "08-off")
 
     }
@@ -143,7 +156,7 @@ class UiTest {
         val a = launch()
         power(a).performClick()
         Heater.commandSent(app)
-        // The module keeps saying OFF: STATUS at 6 s, then every 12 s after a reply, up to a minute
+        // The module keeps saying OFF: STATUS at 1 s, then every 12 s after a reply, up to 51 s
         var polls = 0
         repeat(80) {
             advance(1_000)
@@ -155,6 +168,7 @@ class UiTest {
         idle()
         assertEquals(Heater.OFF, Heater.prefs(app).getString(Heater.STATE, ""))
         assertEquals("Отопитель не запустился", a.findViewById<android.widget.TextView>(R.id.message).text)
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
         assertTrue("polls: $polls", polls in 3..5)
         shot(a, "11-start-failed")
     }
@@ -168,6 +182,7 @@ class UiTest {
         advance(Heater.replyTimeout(app) + 1_000)
         assertEquals("Пуск", power(a).label)
         assertEquals("Нет ответа от Altox", a.findViewById<android.widget.TextView>(R.id.message).text)
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
     }
 
     @Test fun unknownSms() {
@@ -191,6 +206,8 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
         val seen = (0..11).map { m ->
             advance(start + m * 60_000 + 30_000 - time)
+            // The flame STATUS at 4 min
+            if (Heater.prefs(app).getLong(Heater.STATUS_SENT, 0) > 0) Heater.onReply(app, reply(on = true, flame = true, coolant = 30))
             bar.progress
         }
         assertTrue("$seen", seen.zipWithNext().all { (x, y) -> y < x })
@@ -207,9 +224,7 @@ class UiTest {
         shadowOf(bar).onSeekBarChangeListener.onProgressChanged(bar, Heater.RUN_MINUTES.indexOf(90) * MainActivity.STEP + 20, true)
         idle()
         assertEquals("90 мин", text(a, R.id.minutesLabel))
-        assertEquals("Будет отправлено 5 SMS (пуск, статус после пуска, 2\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
-        shot(a, "14-slider-sms")
-        assertEquals("Будет отправлено 5 SMS (пуск, статус после пуска, 2\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 6 SMS (пуск, статус после пуска, статус пламени, 2\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
         shot(a, "14-slider-sms")
         power(a).performClick()
         assertEquals("START:90", lastSms())
@@ -231,7 +246,8 @@ class UiTest {
         c.pause().stop().destroy()
 
         Heater.commandSent(app) // what SentReceiver does
-        assertEquals(time + 6_000, nextAlarm())
+        val start = time
+        assertEquals(time + 1_000, nextAlarm())
         time = nextAlarm()
         PollReceiver().onReceive(app, Intent())
         assertEquals("STATUS", lastSms())
@@ -240,8 +256,8 @@ class UiTest {
         time += 5_000
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
         assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
-        // Next wake-up: STATUS after the end of the run
-        assertEquals(Heater.prefs(app).getLong(Heater.ENDS_AT, 0) + 6_000, nextAlarm())
+        // Next wake-up: the flame STATUS
+        assertEquals(start + 240_000, nextAlarm())
 
         val a = launch()
         assertEquals("Стоп", power(a).label)
@@ -274,32 +290,43 @@ class UiTest {
         shot(a, "12-settings-changed")
         val timeout = a.findViewById<android.widget.EditText>(R.id.replyTimeout)
         assertEquals("60", timeout.text.toString())
-        val delay = a.findViewById<SeekBar>(R.id.pollDelay)
-        assertEquals("6 с", text(a, R.id.pollDelayLabel))
-        delay.progress = 60
-        assertEquals("30 с", text(a, R.id.pollDelayLabel))
-        delay.progress = 12
-        assertEquals("13 с", text(a, R.id.pollDelayLabel))
         val count = a.findViewById<SeekBar>(R.id.periodicCount)
         assertEquals("Авто", text(a, R.id.periodicCountLabel))
         count.progress = 0
         assertEquals("Выкл", text(a, R.id.periodicCountLabel))
-        assertEquals("Всего за цикл 3 SMS: пуск, статус после пуска, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Всего за цикл 4 SMS: пуск, статус после пуска, статус пламени, статус в конце", text(a, R.id.periodicLabel))
+        // The polls share the run after the flame STATUS: 26 of 30 minutes
         count.progress = 2
         assertEquals("2", text(a, R.id.periodicCountLabel))
-        assertEquals("Раз в 10 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 8 минут 40 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, статус пламени, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
         shot(a, "12-settings-periodic")
         count.progress = 3
-        assertEquals("Раз в 7 минут 30 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 6 SMS: пуск, статус после пуска, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 6 минут 30 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 7 SMS: пуск, статус после пуска, статус пламени, 3\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
         count.progress = 1
-        assertEquals("Раз в 15 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 4 SMS: пуск, статус после пуска, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 13 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, статус пламени, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
         count.progress = 20
         assertEquals("20", text(a, R.id.periodicCountLabel))
-        assertEquals("Раз в 1 минуту 25 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 23 SMS: пуск, статус после пуска, 20\u00A0опросов, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 1 минуту 14 секунд за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 24 SMS: пуск, статус после пуска, статус пламени, 20\u00A0опросов, статус в конце", text(a, R.id.periodicLabel))
         count.progress = 30
         assertEquals("Авто", text(a, R.id.periodicCountLabel))
-        assertEquals("Раз в 10 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, 2\u00A0опроса, статус в конце", text(a, R.id.periodicLabel))
+        assertEquals("Раз в 13 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, статус пламени, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
         shot(a, "12-settings-periodic-auto")
+
+        // Minutes to FLAME: YES, 1 to 9; the polls follow it
+        val delay = a.findViewById<SeekBar>(R.id.flameDelay)
+        assertEquals("4 мин", text(a, R.id.flameDelayLabel))
+        delay.progress = 60
+        assertEquals("9 мин", text(a, R.id.flameDelayLabel))
+        delay.progress = 1
+        assertEquals("2 мин", text(a, R.id.flameDelayLabel))
+        assertEquals("Раз в 14 минут за цикл 30 мин (выбран\u00A0сейчас)\nВсего за цикл 5 SMS: пуск, статус после пуска, статус пламени, 1\u00A0опрос, статус в конце", text(a, R.id.periodicLabel))
+
+        // System sounds: the picker's choice, silence included
+        a.findViewById<android.widget.TextView>(R.id.finishSound).performClick()
+        val pick = shadowOf(a).nextStartedActivityForResult
+        assertEquals(android.media.RingtoneManager.ACTION_RINGTONE_PICKER, pick.intent.action)
+        shadowOf(a).receiveResult(pick.intent, Activity.RESULT_OK, Intent())
+        assertEquals("Без звука", text(a, R.id.finishSound))
         timeout.setText("5")
         save.performClick()
         assertFalse(a.isFinishing) // out of range
@@ -307,23 +334,25 @@ class UiTest {
         save.performClick()
         assertEquals("+79001112233", Heater.prefs(app).getString(Heater.PHONE, ""))
         assertEquals(45_000L, Heater.replyTimeout(app))
-        assertEquals(13_000L, Heater.pollDelay(app))
+        assertEquals(120_000L, Heater.flameDelay(app))
+        assertEquals(null, Heater.sound(app, Heater.FINISH_SOUND))
+        assertEquals(Heater.defaultSound(Heater.ERROR_SOUND), Heater.sound(app, Heater.ERROR_SOUND))
         assertEquals(Heater.PERIODIC_AUTO, Heater.periodicSetting(app))
-        assertEquals(2, Heater.periodic(app))
+        assertEquals(1, Heater.periodic(app))
         assertTrue(a.isFinishing)
     }
 
-    /** Auto: 1 to 5 STATUS by the run time; the old checkbox, if it was off, stays off */
+    /** Auto: 0 to 3 STATUS by the run time, besides the flame one; the old checkbox, if it was off, stays off */
     @Test fun periodicAuto() {
-        assertEquals(listOf(1, 1, 2, 2, 3, 3, 4, 4),
+        assertEquals(listOf(0, 0, 1, 1, 2, 2, 3, 3),
             listOf(10, 20, 21, 35, 36, 49, 50, 120).map { Heater.autoCount(it) })
         configure()
         Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, Heater.PERIODIC_AUTO).putInt(Heater.MINUTES, 90).commit()
         val a = launch()
-        assertEquals("Будет отправлено 7 SMS (пуск, статус после пуска, 4\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 7 SMS (пуск, статус после пуска, статус пламени, 3\u00A0опроса, статус в конце).", text(a, R.id.smsLabel))
         Heater.prefs(app).edit().putInt(Heater.MINUTES, 20).commit()
         idle()
-        assertEquals("Будет отправлено 4 SMS (пуск, статус после пуска, 1\u00A0опрос, статус в конце).", text(a, R.id.smsLabel))
+        assertEquals("Будет отправлено 4 SMS (пуск, статус после пуска, статус пламени, статус в конце).", text(a, R.id.smsLabel))
 
         Heater.prefs(app).edit().putBoolean(Heater.PERIODIC, false).putInt(Heater.PERIODIC_COUNT, 4).commit()
         assertEquals(0, Heater.periodicSetting(app))
@@ -344,44 +373,53 @@ class UiTest {
         idle()
         Heater.prefs(app).edit().putInt(Heater.MINUTES, 30).commit() // the slider does not matter now
 
-        advance(start + 12 * 60_000 + 1_000 - time) // the 12-minute slot of 9 per run has just passed
+        advance(start + 240_000 - time) // the flame STATUS
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 30))
+
+        // 9 per run split the 46 minutes after the flame STATUS into 4:36 steps: 8:36, 13:12...
+        advance(start + 12 * 60_000 + 1_000 - time)
         val s = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
         s.findViewById<SeekBar>(R.id.periodicCount).progress = 9
-        assertEquals("Раз в 5 минут за цикл 50 мин (текущий\u00A0нагрев)\nВсего за цикл 12 SMS: пуск, статус после пуска, 9\u00A0опросов, статус в конце", text(s, R.id.periodicLabel))
+        assertEquals("Раз в 4 минуты 36 секунд за цикл 50 мин (текущий\u00A0нагрев)\nВсего за цикл 13 SMS: пуск, статус после пуска, статус пламени, 9\u00A0опросов, статус в конце", text(s, R.id.periodicLabel))
         s.findViewById<android.widget.Button>(R.id.save).performClick()
         assertTrue(s.isFinishing)
-        assertEquals(start + 15 * 60_000, nextAlarm())
+        assertEquals(start + 792_000, nextAlarm())
 
-        assertEquals(start + 15 * 60_000, Heater.prefs(app).getLong(Heater.AUTO_AT, 0))
+        assertEquals(start + 792_000, Heater.prefs(app).getLong(Heater.AUTO_AT, 0))
 
-        // Fewer per run: the grid is redrawn, still from the start of the run
-        Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, 4).commit()
+        // Fewer per run: the grid is redrawn, still from the flame STATUS: 11:30 steps
+        Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, 3).commit()
         Heater.planPeriodic(app)
         Heater.scheduleWake(app)
-        assertEquals(start + 20 * 60_000, nextAlarm())
+        assertEquals(start + 930_000, nextAlarm())
 
-        // The last slot is 10 minutes before the end, then only the end check
-        advance(start + 40 * 60_000 - time)
+        // The last slot is 11:30 before the end, then only the end check
+        advance(start + 2_310_000 - time)
         assertEquals("STATUS", lastSms())
         Heater.onReply(app, reply(on = true, flame = true, coolant = 60))
         idle()
         assertEquals(0L, Heater.prefs(app).getLong(Heater.AUTO_AT, 0))
-        assertEquals(start + 50 * 60_000 + 6_000, nextAlarm())
+        assertEquals(start + 50 * 60_000 + 30_000, nextAlarm())
     }
 
-    /** The run time is over: STATUS confirms the heater is off */
+    /** The run time is over: STATUS 30 s later confirms the heater is off, the finish sound */
     @Test fun endOfRun() {
         configure(periodic = 0)
         val a = launch()
         power(a).performClick()
         Heater.commandSent(app)
-        advance(6_500)
+        val start = time
+        advance(1_500)
         Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
         idle()
+        assertEquals(start + 240_000, nextAlarm())
+        advance(start + 240_000 - time)
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 30))
+        idle()
         val endsAt = Heater.prefs(app).getLong(Heater.ENDS_AT, 0)
-        assertEquals(endsAt + 6_000, nextAlarm())
+        assertEquals(endsAt + 30_000, nextAlarm())
 
-        advance(endsAt + 6_000 - time)
+        advance(endsAt + 30_000 - time)
         assertEquals("STATUS", lastSms())
         assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
         assertTrue(power(a).isEnabled) // Stop stays free
@@ -389,7 +427,141 @@ class UiTest {
         idle()
         assertEquals("Пуск", power(a).label)
         assertEquals("", text(a, R.id.message))
+        assertEquals(listOf(Heater.FINISH_SOUND), sounds)
         assertEquals(0L, Heater.nextWake(app))
+    }
+
+    /** No flame by the flame STATUS: one more a minute later; flame then is fine */
+    @Test fun slowFlame() {
+        configure(periodic = 0)
+        val a = launch()
+        val start = startedWithoutFlame(a)
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 14))
+        idle()
+        assertEquals("", text(a, R.id.message))
+        assertEquals("Пламя есть", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals(listOf<String>(), sounds)
+        assertEquals(Heater.prefs(app).getLong(Heater.ENDS_AT, 0) + 30_000, nextAlarm())
+        assertTrue(time >= start + 300_000)
+    }
+
+    /** No flame at the second check either: the error sound, STOP, off a second later */
+    @Test fun noFlame() {
+        configure(periodic = 0)
+        val a = launch()
+        startedWithoutFlame(a)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 14))
+        idle()
+        assertEquals("STOP", lastSms())
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
+        assertEquals("Пламени нет через 5 мин после пуска, отправлен STOP", text(a, R.id.message))
+        Heater.commandSent(app)
+        advance(1_500)
+        assertEquals("STATUS", lastSms())
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 14))
+        idle()
+        assertEquals("Пуск", power(a).label)
+        assertEquals("Пламени нет через 5 мин после пуска, отопитель остановлен", text(a, R.id.message))
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
+        assertEquals(0L, Heater.nextWake(app))
+        shot(a, "16-no-flame")
+    }
+
+    /** No flame, and still on after our STOP: the error state */
+    @Test fun noFlameStopFails() {
+        configure(periodic = 0)
+        val a = launch()
+        startedWithoutFlame(a)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 14))
+        Heater.commandSent(app)
+        advance(1_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 14))
+        idle()
+        assertEquals("Ошибка", power(a).label)
+        assertEquals("Нет пламени, и отопитель не выключился после команды STOP", text(a, R.id.message))
+        assertEquals(listOf(Heater.ERROR_SOUND, Heater.ERROR_SOUND), sounds)
+    }
+
+    /** Webasto gives up on ignition by itself: the next STATUS sees it off */
+    @Test fun offWhileIgniting() {
+        configure(periodic = 0)
+        val a = launch()
+        startedWithoutFlame(a)
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 14))
+        idle()
+        assertEquals("Пуск", power(a).label)
+        assertEquals("Отопитель выключился, так и не разгоревшись", text(a, R.id.message))
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
+    }
+
+    /** START, ON without flame, no flame at 4 min either; returns when START left, the second flame STATUS is sent */
+    private fun startedWithoutFlame(a: MainActivity): Long {
+        power(a).performClick()
+        Heater.commandSent(app)
+        val start = time
+        advance(1_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
+        advance(start + 240_000 - time)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 13))
+        idle()
+        assertEquals("Пламени нет через 4 мин после пуска, ещё проверка через 1 мин", text(a, R.id.message))
+        assertEquals("Розжиг", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals(start + 300_000, nextAlarm())
+        advance(start + 300_000 - time)
+        assertEquals("STATUS", lastSms())
+        return start
+    }
+
+    /** No reply to the flame STATUS, twice: the same as no flame */
+    @Test fun flameNoReply() {
+        configure(periodic = 0)
+        val a = launch()
+        power(a).performClick()
+        Heater.commandSent(app)
+        val start = time
+        advance(1_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
+        advance(start + 240_000 - time)
+        assertEquals("STATUS", lastSms())
+        advance(Heater.replyTimeout(app) + 1_000)
+        assertEquals("Нет ответа о пламени через 4 мин после пуска, ещё проверка через 1 мин", text(a, R.id.message))
+        assertEquals("Розжиг", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals(start + 300_000 + Heater.replyTimeout(app) + 1_000, nextAlarm())
+        advance(nextAlarm() - time)
+        assertEquals("STATUS", lastSms())
+        advance(Heater.replyTimeout(app) + 1_000)
+        assertEquals("STOP", lastSms())
+        assertEquals("Нет ответа о пламени через 5 мин после пуска, отправлен STOP", text(a, R.id.message))
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
+    }
+
+    /** Something unparsable instead of the reply: the timeout shows it, not "Нет ответа" */
+    @Test fun unknownReplyThenTimeout() {
+        configure()
+        val a = launch()
+        power(a).performClick()
+        Heater.commandSent(app)
+        advance(1_500)
+        Heater.onReply(app, "ERROR 17")
+        advance(Heater.replyTimeout(app) + 1_000)
+        assertEquals("Пуск", power(a).label)
+        assertEquals("Непонятный ответ Altox:\nERROR 17", text(a, R.id.message))
+        // An old one does not explain a later timeout
+        status(a).performClick()
+        advance(Heater.replyTimeout(app) + 1_000)
+        assertEquals("Нет ответа на запрос статуса", text(a, R.id.message))
+    }
+
+    /** A reply without HEATER ON/OFF while starting: asked again, not stuck */
+    @Test fun startReplyWithoutState() {
+        configure()
+        power(launch()).performClick()
+        Heater.commandSent(app)
+        time += 1_000
+        Heater.tick(app)
+        Heater.onReply(app, "FLAME: NO\nHEATER: 7C")
+        assertEquals(Heater.STARTING, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertEquals(time + 12_000, nextAlarm())
     }
 
     /** The STATUS after the end got no reply: the run ends anyway */
@@ -398,7 +570,7 @@ class UiTest {
         launch()
         Heater.onReply(app, reply(on = true, flame = true, coolant = 50))
         Heater.prefs(app).edit().putLong(Heater.ENDS_AT, time + 60_000).putLong(Heater.RUN_TOTAL, 60_000).commit()
-        time += 66_000
+        time += 90_000
         Heater.tick(app)
         assertEquals("STATUS", lastSms())
         time += Heater.replyTimeout(app) + 1
@@ -408,29 +580,66 @@ class UiTest {
         assertEquals(0L, Heater.nextWake(app))
     }
 
-    /** Still on after the end: started again elsewhere */
+    /** Still on 30 s after the end: STOP, STATUS a second later; off then is a normal finish */
     @Test fun endOfRunStillOn() {
         configure()
         launch()
-        Heater.onReply(app, reply(on = true, flame = true, coolant = 50))
-        Heater.prefs(app).edit().putLong(Heater.ENDS_AT, time + 60_000).putLong(Heater.RUN_TOTAL, 60_000).commit()
-        time += 66_000
-        Heater.tick(app)
-        Heater.onReply(app, reply(on = true, flame = true, coolant = 60))
-        assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
-        assertEquals(0L, Heater.prefs(app).getLong(Heater.ENDS_AT, -1))
+        stillOnAtEnd()
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 60))
+        assertEquals(Heater.OFF, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertEquals(listOf(Heater.FINISH_SOUND), sounds)
+        assertEquals(0L, Heater.nextWake(app))
     }
 
-    @Test fun pollDelaySetting() {
+    /** Still on after our STOP too: the error state, the error sound; a tap sends STOP again */
+    @Test fun endOfRunStopFails() {
         configure()
-        Heater.prefs(app).edit().putInt(Heater.POLL_DELAY, 15).commit()
+        val a = launch()
+        stillOnAtEnd()
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 60))
+        idle()
+        assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
+        assertEquals("Ошибка", power(a).label)
+        assertTrue(power(a).isEnabled)
+        assertEquals("Отопитель не выключился в конце цикла и после команды STOP", text(a, R.id.message))
+        shot(a, "15-stop-failed")
+        power(a).performClick()
+        idle()
+        assertEquals("STOP", lastSms())
+        assertEquals("Остановка...", power(a).label)
+    }
+
+    /** A run of a minute, its end STATUS answered ON: STOP goes out, then STATUS a second after it left */
+    private fun stillOnAtEnd() {
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 50))
+        Heater.prefs(app).edit().putLong(Heater.ENDS_AT, time + 60_000).putLong(Heater.RUN_TOTAL, 60_000).commit()
+        time += 90_000
+        Heater.tick(app)
+        assertEquals("STATUS", lastSms())
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 60))
+        assertEquals("STOP", lastSms())
+        assertEquals(Heater.STOPPING, Heater.prefs(app).getString(Heater.STATE, ""))
+        Heater.commandSent(app)
+        time += 1_000
+        Heater.tick(app)
+        assertEquals("STATUS", lastSms())
+    }
+
+    @Test fun flameDelaySetting() {
+        configure(periodic = 0)
+        Heater.prefs(app).edit().putInt(Heater.FLAME_DELAY, 2).commit()
         val a = launch()
         power(a).performClick()
         Heater.commandSent(app)
-        assertEquals(time + 15_000, nextAlarm())
+        val start = time
+        assertEquals(time + 1_000, nextAlarm())
+        advance(1_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
+        assertEquals(start + 120_000, nextAlarm())
     }
 
-    /** 5 STATUS per 30-minute run, every 5 minutes: fresh temperatures, Stop stays free */
+    /** 5 STATUS per 30-minute run, every 4:20 after the flame STATUS: fresh temperatures, Stop stays free */
     @Test fun periodicStatus() {
         configure()
         Heater.prefs(app).edit().putInt(Heater.PERIODIC_COUNT, 5).commit()
@@ -439,12 +648,13 @@ class UiTest {
         Heater.commandSent(app)
         val start = time
         advance(6_500)
-        Heater.onReply(app, reply(on = true, flame = false, coolant = 12))
+        // Burning already: no separate flame STATUS
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 12))
         idle()
-        assertEquals(start + 300_000, nextAlarm()) // 5 per 30 minutes: the run in 6 steps
-        assertEquals("Будет отправлено 8 SMS (пуск, статус после пуска, 5\u00A0опросов, статус в конце).", text(a, R.id.smsLabel))
+        assertEquals(start + 500_000, nextAlarm()) // the 26 minutes after the flame STATUS in 6 steps
+        assertEquals("Будет отправлено 9 SMS (пуск, статус после пуска, статус пламени, 5\u00A0опросов, статус в конце).", text(a, R.id.smsLabel))
 
-        advance(300_000)
+        advance(500_000)
         assertEquals("STATUS", lastSms())
         assertTrue(Heater.prefs(app).getBoolean(Heater.STATUS_AUTO, false))
         assertTrue(power(a).isEnabled)
@@ -455,11 +665,12 @@ class UiTest {
         assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
 
         // Off 20 minutes before the end: a problem, told even with the app on screen
-        advance(300_000)
+        advance(93_500)
         Heater.onReply(app, reply(on = false, flame = false, coolant = 40))
         idle()
         assertEquals("Пуск", power(a).label)
         assertEquals("Отопитель выключился раньше срока, за 20 мин до конца", text(a, R.id.message))
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
         assertEquals(0L, Heater.nextWake(app))
     }
 
@@ -483,15 +694,15 @@ class UiTest {
         assertEquals(PHONE, Heater.prefs(app).getString(Heater.PHONE, ""))
     }
 
-    /** The timings in the tests are for a 30-minute run and a 6-second poll delay, not the defaults */
+    /** The timings in the tests are for a 30-minute run, not the default */
     private fun configure(periodic: Int = Heater.PERIODIC_AUTO) =
         Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).putInt(Heater.PERIODIC_COUNT, periodic)
-            .putInt(Heater.MINUTES, 30).putInt(Heater.POLL_DELAY, 6).commit()
+            .putInt(Heater.MINUTES, 30).commit()
 
-    /** Before the user moves them: a 20-minute run, STATUS 3 s after a command */
+    /** Before the user moves them: a 20-minute run, flame STATUS 4 min after START */
     @Test fun defaults() {
         assertEquals(20, Heater.minutes(app))
-        assertEquals(3_000L, Heater.pollDelay(app))
+        assertEquals(240_000L, Heater.flameDelay(app))
         assertEquals(Heater.PERIODIC_AUTO, Heater.periodicSetting(app))
     }
 

@@ -15,6 +15,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.sin
 
 class MainActivity : Activity() {
     private lateinit var power: RoundButton
@@ -124,16 +125,20 @@ class MainActivity : Activity() {
         val statusBusy = !pending && prefs.getLong(Heater.STATUS_SENT, 0) > 0
         // A periodic STATUS while heating does not lock Stop
         val powerLocked = statusBusy && !prefs.getBoolean(Heater.STATUS_AUTO, false)
+        // Still on after the end and our STOP; a tap sends STOP again
+        val error = state == Heater.ON && prefs.getBoolean(Heater.ERROR, false)
 
-        power.label = when (state) {
-            Heater.STARTING -> "Запуск..."
-            Heater.ON -> "Стоп"
-            Heater.STOPPING -> "Остановка..."
+        power.label = when {
+            state == Heater.STARTING -> "Запуск..."
+            error -> "Ошибка"
+            state == Heater.ON -> "Стоп"
+            state == Heater.STOPPING -> "Остановка..."
             else -> "Пуск"
         }
         power.fill = getColor(when {
             !configured -> R.color.btn_disabled
             pending -> R.color.btn_pending
+            error -> R.color.error
             state == Heater.ON -> R.color.btn_on
             else -> R.color.btn_off
         })
@@ -152,6 +157,7 @@ class MainActivity : Activity() {
             !configured -> "Укажите номер Altox в настройках"
             state == Heater.STARTING -> "Запуск отопителя"
             state == Heater.STOPPING -> "Остановка отопителя"
+            error -> "Отопитель не выключается"
             state == Heater.ON -> "Нагрев запущен"
             prefs.contains(Heater.PREV_STATE) -> "Нагрев выключен"
             else -> ""
@@ -173,16 +179,20 @@ class MainActivity : Activity() {
         smsLabel.text = Heater.smsText(Heater.periodic(this))
 
         val time = prefs.getLong(Heater.STATUS_TIME, 0)
-        statusBlock.visibility = if (time == 0L) View.INVISIBLE else View.VISIBLE
+        statusBlock.visibility = if (time == 0L && !igniting()) View.INVISIBLE else View.VISIBLE
         if (time > 0) {
             fun value(key: String, unit: String) =
                 prefs.getString(key, "").let { if (it.isNullOrEmpty()) "—" else "$it $unit" }
             statusInfo.text = "${value(Heater.COOLANT, "°C")}\n" +
                 "${value(Heater.CABIN, "°C")}\n" +
                 value(Heater.VOLTAGE, "В")
-            val burning = prefs.getBoolean(Heater.FLAME, false)
-            flame.setImageResource(if (burning) R.drawable.ic_flame else R.drawable.ic_flame_off)
-            flame.contentDescription = if (burning) "Пламя есть" else "Пламени нет"
+        }
+        val burning = prefs.getBoolean(Heater.FLAME, false)
+        flame.setImageResource(if (burning || igniting()) R.drawable.ic_flame else R.drawable.ic_flame_off)
+        flame.contentDescription = when {
+            igniting() -> "Розжиг"
+            burning -> "Пламя есть"
+            else -> "Пламени нет"
         }
         renderFrame()
     }
@@ -210,7 +220,7 @@ class MainActivity : Activity() {
             }
             Heater.ON -> {
                 power.spinning = false
-                power.sub = ""
+                power.sub = if (prefs.getBoolean(Heater.ERROR, false)) "нажмите,\nчтобы\u00A0остановить" else ""
                 val endsAt = prefs.getLong(Heater.ENDS_AT, 0)
                 val total = prefs.getLong(Heater.RUN_TOTAL, 0)
                 if (endsAt > 0 && total > 0) {
@@ -239,6 +249,8 @@ class MainActivity : Activity() {
 
         val time = prefs.getLong(Heater.STATUS_TIME, 0)
         if (time > 0) statusTime.text = "Обновлено: " + whenText(time, now)
+        // Flickers until the heater reaches FLAME: YES
+        flame.alpha = if (igniting()) 0.6f + 0.4f * sin(now / 120.0).toFloat() * sin(now / 47.0).toFloat() else 1f
 
         if (!Heater.isPending(state) && statusSent > 0) spin(status, "${(now - statusSent) / 1000} с")
         else {
@@ -246,6 +258,9 @@ class MainActivity : Activity() {
             status.sub = ""
         }
     }
+
+    private fun igniting() = prefs.getBoolean(Heater.IGNITING, false) &&
+        prefs.getString(Heater.STATE, Heater.OFF).let { it == Heater.STARTING || it == Heater.ON }
 
     private fun spin(b: RoundButton, sub: String) {
         b.progress = -1f

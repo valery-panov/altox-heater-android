@@ -15,4 +15,14 @@
         <item name="android:textColor">@color/text_secondary</item>
         <item name="android:textSize">14sp</item>
     </style>
+    <style name="SoundPicker">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:background">?android:attr/selectableItemBackground</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:textSize">16sp</item>
+    </style>
 </resources>
