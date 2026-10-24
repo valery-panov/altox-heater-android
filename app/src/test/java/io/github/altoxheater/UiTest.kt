@@ -103,7 +103,7 @@ class UiTest {
         // On, not burning yet: the flame flickers until the flame STATUS
         Heater.onReply(app, reply(on = true, flame = false, coolant = 8))
         advance(192_500 - 1_300) // 3 min 12.5 s since START left
-        assertEquals("Розжиг", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals("Розжиг", flame(a).contentDescription)
         assertEquals("Стоп", power(a).label)
         assertEquals("", power(a).sub)
         assertEquals("Осталось", text(a, R.id.minutesTitle))
@@ -118,7 +118,7 @@ class UiTest {
         assertEquals("STATUS", lastSms())
         Heater.onReply(app, reply(on = true, flame = true, coolant = 41))
         idle()
-        assertEquals("Пламя есть", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals("Пламя есть", flame(a).contentDescription)
         assertEquals("", text(a, R.id.message))
         shot(a, "06-on-flame")
 
@@ -444,13 +444,22 @@ class UiTest {
         val endsAt = Heater.prefs(app).getLong(Heater.ENDS_AT, 0)
         assertEquals(endsAt + 30_000, nextAlarm())
 
+        // After the end the check is on Статус; Стоп does not look like it is being sent
+        advance(endsAt + 10_000 - time)
+        assertFalse(power(a).spinning)
+        assertEquals("через 20 с", status(a).sub)
+        assertEquals("Проверяем, что отопитель выключился", text(a, R.id.caption))
+        assertEquals(FlameView.Mode.STOPPING, flame(a).mode)
         advance(endsAt + 30_000 - time)
         assertEquals("STATUS", lastSms())
         assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertFalse(power(a).spinning)
+        assertTrue(status(a).spinning)
         assertTrue(power(a).isEnabled) // Stop stays free
         Heater.onReply(app, reply(on = false, flame = false, coolant = 70))
         idle()
         assertEquals("Пуск", power(a).label)
+        assertEquals(FlameView.Mode.OFF, flame(a).mode)
         assertEquals("", text(a, R.id.message))
         assertEquals(listOf(Heater.FINISH_SOUND), sounds)
         assertEquals(0L, Heater.nextWake(app))
@@ -464,7 +473,7 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = true, coolant = 14))
         idle()
         assertEquals("", text(a, R.id.message))
-        assertEquals("Пламя есть", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals("Пламя есть", flame(a).contentDescription)
         assertEquals(listOf<String>(), sounds)
         assertEquals(Heater.prefs(app).getLong(Heater.ENDS_AT, 0) + 30_000, nextAlarm())
         assertTrue(time >= start + 300_000)
@@ -530,7 +539,7 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = false, coolant = 13))
         idle()
         assertEquals("Пламени нет через 4 мин после пуска, ещё проверка через 1 мин", text(a, R.id.message))
-        assertEquals("Розжиг", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals("Розжиг", flame(a).contentDescription)
         assertEquals(start + 300_000, nextAlarm())
         advance(start + 300_000 - time)
         assertEquals("STATUS", lastSms())
@@ -550,7 +559,7 @@ class UiTest {
         assertEquals("STATUS", lastSms())
         advance(Heater.replyTimeout(app) + 1_000)
         assertEquals("Нет ответа о пламени через 4 мин после пуска, ещё проверка через 1 мин", text(a, R.id.message))
-        assertEquals("Розжиг", a.findViewById<android.widget.ImageView>(R.id.flame).contentDescription)
+        assertEquals("Розжиг", flame(a).contentDescription)
         assertEquals(start + 300_000 + Heater.replyTimeout(app) + 1_000, nextAlarm())
         advance(nextAlarm() - time)
         assertEquals("STATUS", lastSms())
@@ -626,6 +635,7 @@ class UiTest {
         assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
         assertEquals("Ошибка", power(a).label)
+        assertEquals(FlameView.Mode.ERROR, flame(a).mode)
         assertTrue(power(a).isEnabled)
         assertEquals("Отопитель не выключился в конце цикла и после команды STOP", text(a, R.id.message))
         shot(a, "15-stop-failed")
@@ -633,6 +643,7 @@ class UiTest {
         idle()
         assertEquals("STOP", lastSms())
         assertEquals("Остановка...", power(a).label)
+        assertEquals(FlameView.Mode.STOPPING, flame(a).mode)
     }
 
     /** A run of a minute, its end STATUS answered ON: STOP goes out, then STATUS a second after it left */
@@ -860,6 +871,7 @@ class UiTest {
 
     private fun power(a: Activity) = a.findViewById<RoundButton>(R.id.power)
     private fun status(a: Activity) = a.findViewById<RoundButton>(R.id.status)
+    private fun flame(a: Activity) = a.findViewById<FlameView>(R.id.flame)
 
     private fun lastSms(): String? =
         shadowOf(app.getSystemService(SmsManager::class.java)).lastSentTextMessageParams?.text

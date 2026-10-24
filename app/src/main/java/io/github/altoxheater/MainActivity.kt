@@ -11,12 +11,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
 import java.util.Calendar
 import java.util.Locale
-import kotlin.math.sin
 
 class MainActivity : Activity() {
     private lateinit var power: RoundButton
@@ -28,7 +26,7 @@ class MainActivity : Activity() {
     private lateinit var smsLabel: TextView
     private lateinit var status: RoundButton
     private lateinit var statusBlock: View
-    private lateinit var flame: ImageView
+    private lateinit var flame: FlameView
     private lateinit var statusInfo: TextView
     private lateinit var statusTime: TextView
 
@@ -198,13 +196,6 @@ class MainActivity : Activity() {
                 "${value(Heater.CABIN, "°C")}\n" +
                 value(Heater.VOLTAGE, "В")
         }
-        val burning = prefs.getBoolean(Heater.FLAME, false)
-        flame.setImageResource(if (burning || igniting()) R.drawable.ic_flame else R.drawable.ic_flame_off)
-        flame.contentDescription = when {
-            igniting() -> "Розжиг"
-            burning -> "Пламя есть"
-            else -> "Пламени нет"
-        }
         renderFrame()
     }
 
@@ -213,6 +204,8 @@ class MainActivity : Activity() {
         val now = Heater.now()
         val state = prefs.getString(Heater.STATE, Heater.OFF)
         val statusSent = prefs.getLong(Heater.STATUS_SENT, 0)
+        // The run is over, the STATUS after it is not sent yet
+        var endCheckWait = false
 
         when (state) {
             Heater.STARTING, Heater.STOPPING -> {
@@ -242,8 +235,17 @@ class MainActivity : Activity() {
                         left / 60_000, left % 60_000 / 1000.0)
                     // The whole width is this run: from the right edge at the start to the left at the end
                     minutes.progress = (minutes.max * left / total).toInt()
-                    // The run is over, the STATUS after it tells whether the heater is off
-                    if (left == 0L) spin(power, if (statusSent > 0) "ждём ответ\n${(now - statusSent) / 1000} с" else "")
+                    // The run is over, the STATUS after it tells whether the heater is off; that is
+                    // shown on Статус, Стоп is not being sent
+                    if (left == 0L && !prefs.getBoolean(Heater.ERROR, false)) {
+                        caption.text = "Проверяем, что отопитель выключился"
+                        if (statusSent == 0L) {
+                            endCheckWait = true
+                            status.spinning = false
+                            status.progress = (now - endsAt).toFloat() / Heater.END_DELAY
+                            status.sub = "через ${seconds(endsAt + Heater.END_DELAY - now)} с"
+                        }
+                    }
                 } else {
                     // Started elsewhere, the run time is unknown
                     power.progress = -1f
@@ -260,12 +262,21 @@ class MainActivity : Activity() {
 
         val time = prefs.getLong(Heater.STATUS_TIME, 0)
         if (time > 0) statusTime.text = "Обновлено: " + whenText(time, now)
-        // Flickers until the heater reaches FLAME: YES
-        flame.alpha = if (igniting()) 0.6f + 0.4f * sin(now / 120.0).toFloat() * sin(now / 47.0).toFloat() else 1f
+        val error = state == Heater.ON && prefs.getBoolean(Heater.ERROR, false)
+        val endsAt = prefs.getLong(Heater.ENDS_AT, 0)
+        flame.mode = when {
+            error -> FlameView.Mode.ERROR
+            // Our STOP, or the run is over and the STATUS after it should show the heater off
+            state == Heater.STOPPING || state == Heater.ON && endsAt in 1..now -> FlameView.Mode.STOPPING
+            state == Heater.STARTING -> FlameView.Mode.IGNITING
+            state == Heater.ON -> if (prefs.getBoolean(Heater.FLAME, false)) FlameView.Mode.BURNING else FlameView.Mode.IGNITING
+            else -> FlameView.Mode.OFF
+        }
 
         if (!Heater.isPending(state) && statusSent > 0) spin(status, "${(now - statusSent) / 1000} с")
-        else {
+        else if (!endCheckWait) {
             status.spinning = false
+            status.progress = -1f
             status.sub = ""
         }
     }
