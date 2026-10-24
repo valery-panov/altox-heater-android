@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -62,6 +63,10 @@ class MainActivity : Activity() {
         status.label = getString(R.string.status)
         status.labelSize = power.subSize * 1.1f
         status.subSize = power.subSize * 0.85f
+        // Against taps from a pocket or a stray finger: a command only after holding the button
+        for (b in listOf(power, status)) b.holdMs = HOLD_MS
+        power.hint = "удерживайте\n1 секунду"
+        status.hint = "удерживайте"
 
         findViewById<TextView>(R.id.settings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -91,13 +96,19 @@ class MainActivity : Activity() {
         // Looks active all the time (it shows the time left), but takes touches only when idle
         minutes.setOnTouchListener { _, _ -> !sliderEditable }
 
-        val missing = listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        // READ_SMS: a reply that came while the app was stopped, see Heater.catchUp(); notifications: HeaterService's
+        val wanted = listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS) +
+            if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
+        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
 
     override fun onResume() {
         super.onResume()
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        // Before the first tick(): it would time out the STATUS whose reply is already in the inbox
+        Heater.catchUp(this)
+        Heater.scheduleWake(this)
         render()
         handler.post(frame)
     }
@@ -220,7 +231,7 @@ class MainActivity : Activity() {
             }
             Heater.ON -> {
                 power.spinning = false
-                power.sub = if (prefs.getBoolean(Heater.ERROR, false)) "нажмите,\nчтобы\u00A0остановить" else ""
+                power.sub = if (prefs.getBoolean(Heater.ERROR, false)) "удерживайте,\nчтобы\u00A0остановить" else ""
                 val endsAt = prefs.getLong(Heater.ENDS_AT, 0)
                 val total = prefs.getLong(Heater.RUN_TOTAL, 0)
                 if (endsAt > 0 && total > 0) {
@@ -317,6 +328,8 @@ class MainActivity : Activity() {
     companion object {
         /** Slider units per step of the scale */
         const val STEP = 100
+        /** How long to hold Пуск/Стоп and Статус */
+        const val HOLD_MS = 1_000L
         private val MONTHS = listOf("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
     }
 }

@@ -4,6 +4,14 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.Application
+import android.app.Notification
+import android.app.NotificationManager
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.database.Cursor
+import android.database.MatrixCursor
+import android.net.Uri
+import android.view.MotionEvent
 import android.content.DialogInterface
 import android.content.Intent
 import android.graphics.Bitmap
@@ -45,6 +53,8 @@ class UiTest {
         time = System.currentTimeMillis()
         Heater.clock = { time }
         Heater.play = { _, key -> sounds += key }
+        Inbox.rows.clear()
+        Robolectric.setupContentProvider(Inbox::class.java, "sms")
         shadowOf(app).grantPermissions(
             Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_PHONE_STATE,
         )
@@ -709,6 +719,118 @@ class UiTest {
         assertEquals(PHONE, Heater.prefs(app).getString(Heater.PHONE, ""))
     }
 
+    /** A tap only shows the hint; a hold of a second sends, sliding off or a second finger cancels */
+    @Test fun holdToPress() {
+        configure()
+        val a = launch()
+        val b = power(a)
+        touch(b, MotionEvent.ACTION_DOWN)
+        hold(500)
+        touch(b, MotionEvent.ACTION_UP)
+        assertEquals(null, lastSms())
+        assertTrue(b.hintShown)
+        shot(a, "21-tap-hint")
+        hold(RoundButton.HINT_MS)
+        assertFalse(b.hintShown)
+
+        touch(b, MotionEvent.ACTION_DOWN)
+        touch(b, MotionEvent.ACTION_MOVE, x = -10f)
+        hold(1_500)
+        assertEquals(null, lastSms())
+
+        touch(b, MotionEvent.ACTION_DOWN)
+        touch(b, MotionEvent.ACTION_POINTER_DOWN)
+        hold(1_500)
+        assertEquals(null, lastSms())
+
+        touch(b, MotionEvent.ACTION_DOWN)
+        hold(500)
+        shot(a, "22-holding")
+        hold(600)
+        assertEquals("START:30", lastSms())
+        assertEquals("Запуск...", b.label)
+        touch(b, MotionEvent.ACTION_UP)
+        assertFalse(b.hintShown)
+
+        // Статус too
+        Heater.commandSent(app)
+        advance(1_100)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 8))
+        idle()
+        shadowOf(app.getSystemService(SmsManager::class.java)).clearLastSentTextMessageParams()
+        touch(status(a), MotionEvent.ACTION_DOWN)
+        touch(status(a), MotionEvent.ACTION_UP)
+        assertEquals(null, lastSms())
+        touch(status(a), MotionEvent.ACTION_DOWN)
+        hold(1_100)
+        assertEquals("STATUS", lastSms())
+    }
+
+    /**
+     * The app was stopped (swiped away on some phones) with a STATUS waiting: the reply that came
+     * meanwhile is taken from the inbox when it is opened, instead of "Нет ответа"
+     */
+    @Test fun stoppedReplyInInbox() {
+        configure(periodic = 0)
+        shadowOf(app).grantPermissions(Manifest.permission.READ_SMS)
+        val c = Robolectric.buildActivity(MainActivity::class.java).setup()
+        power(c.get()).performClick()
+        c.pause().stop().destroy()
+        Heater.commandSent(app)
+        val start = time
+        time = nextAlarm()
+        PollReceiver().onReceive(app, Intent())
+        assertEquals("STATUS", lastSms())
+        val sent = time
+
+        // Not delivered to SmsReceiver; the alarms are gone too
+        Inbox.rows += Triple("+79990000000", reply(on = false, flame = false, coolant = 1), sent + 2_000)
+        Inbox.rows += Triple("8 900 123-45-67", "PASS?", sent + 3_000)
+        Inbox.rows += Triple(PHONE, reply(on = true, flame = false, coolant = 12), sent + 4_000)
+        Inbox.rows += Triple(PHONE, reply(on = false, flame = false, coolant = 13), sent + Heater.replyTimeout(app) + 5_000)
+        time += 10 * 60_000
+
+        val a = launch()
+        assertEquals(Heater.ON, Heater.prefs(app).getString(Heater.STATE, ""))
+        assertEquals("Стоп", power(a).label)
+        assertEquals(sent + 4_000, Heater.prefs(app).getLong(Heater.STATUS_TIME, 0))
+        assertEquals("12 °C", text(a, R.id.statusInfo).lines().first())
+        // The flame STATUS was due 4 min after START: it goes out now
+        assertTrue(start + 240_000 < time)
+        assertEquals("STATUS", lastSms())
+        shot(a, "23-reopened-from-inbox")
+    }
+
+    /** The service runs while something is awaited and shows the state; it stops with the run */
+    @Test fun serviceDuringRun() {
+        configure(periodic = 0)
+        val a = launch()
+        power(a).performClick()
+        idle()
+        assertEquals(HeaterService::class.java.name, shadowOf(app).nextStartedService.component!!.className)
+        val service = Robolectric.buildService(HeaterService::class.java).create().startCommand(0, 1)
+        try {
+            Heater.commandSent(app)
+            advance(1_100)
+            Heater.onReply(app, reply(on = true, flame = true, coolant = 30))
+            idle()
+            val n = shadowOf(app.getSystemService(NotificationManager::class.java)).allNotifications.single()
+            assertEquals("Нагрев запущен", n.extras.getString(Notification.EXTRA_TITLE))
+            assertTrue(n.extras.getString(Notification.EXTRA_TEXT)!!.startsWith("Конец цикла в "))
+            assertTrue(n.extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN))
+
+            power(a).performClick()
+            Heater.commandSent(app)
+            advance(1_100)
+            Heater.onReply(app, reply(on = false, flame = false, coolant = 30))
+            idle()
+            assertEquals(0L, Heater.nextWake(app))
+            assertEquals(HeaterService::class.java.name, shadowOf(app).nextStoppedService.component!!.className)
+        } finally {
+            service.destroy()
+        }
+    }
+
     /** The timings in the tests are for a 30-minute run, not the default */
     private fun configure(periodic: Int = Heater.PERIODIC_AUTO) =
         Heater.prefs(app).edit().putString(Heater.PHONE, PHONE).putInt(Heater.PERIODIC_COUNT, periodic)
@@ -744,6 +866,20 @@ class UiTest {
 
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 
+    private fun touch(v: android.view.View, action: Int, x: Float = v.width / 2f) {
+        val t = android.os.SystemClock.uptimeMillis()
+        val e = if (action == MotionEvent.ACTION_POINTER_DOWN) {
+            val props = Array(2) { MotionEvent.PointerProperties().apply { id = it } }
+            val coords = Array(2) { MotionEvent.PointerCoords().apply { this.x = x; y = v.height / 2f } }
+            MotionEvent.obtain(t, t, action or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, props, coords, 0, 0, 1f, 1f, 0, 0, 0, 0)
+        } else MotionEvent.obtain(t, t, action, x, v.height / 2f, 0)
+        v.dispatchTouchEvent(e)
+        e.recycle()
+    }
+
+    /** Holds the finger: the looper's clock moves, not the heater's */
+    private fun hold(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms))
+
     private fun nextAlarm(): Long =
         shadowOf(app.getSystemService(AlarmManager::class.java)).peekNextScheduledAlarm()!!.triggerAtMs
 
@@ -777,5 +913,24 @@ class UiTest {
 
     companion object {
         const val PHONE = "+79001234567"
+    }
+
+    /** The SMS inbox: rows of address, body, date; the query's date range is applied */
+    class Inbox : ContentProvider() {
+        override fun onCreate() = true
+        override fun query(uri: Uri, projection: Array<String>?, selection: String?, args: Array<String>?, sort: String?): Cursor {
+            val c = MatrixCursor(arrayOf("address", "body", "date"))
+            val (from, to) = args!!.map { it.toLong() }
+            rows.filter { it.third in from..to }.sortedBy { it.third }.forEach { c.addRow(arrayOf(it.first, it.second, it.third)) }
+            return c
+        }
+        override fun getType(uri: Uri): String? = null
+        override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+        override fun delete(uri: Uri, selection: String?, args: Array<String>?) = 0
+        override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<String>?) = 0
+
+        companion object {
+            val rows = mutableListOf<Triple<String, String, Long>>()
+        }
     }
 }

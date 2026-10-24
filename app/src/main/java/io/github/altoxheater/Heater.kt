@@ -12,6 +12,7 @@ import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.provider.Telephony
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import kotlin.math.abs
@@ -380,7 +381,8 @@ object Heater {
 
     /**
      * Wakes tick() up through PollReceiver at nextWake(), so commands go on while the app is
-     * closed; while it is open, MainActivity calls tick() itself
+     * closed; while it is open, MainActivity calls tick() itself. HeaterService keeps the app
+     * alive for that while there is something to wait for
      */
     fun scheduleWake(ctx: Context) {
         val am = ctx.getSystemService(AlarmManager::class.java)
@@ -394,6 +396,34 @@ object Heater {
             Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms() ->
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
             else -> am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        }
+        HeaterService.sync(ctx, at > 0)
+    }
+
+    /**
+     * Feeds onReply() the reply to the waiting STATUS from the SMS inbox, if SmsReceiver missed
+     * it: an app stopped by the system (or swiped away, on many phones) gets no SMS until it is
+     * opened again. Only SMS from Altox that came within replyTimeout() of the STATUS, as they
+     * would have been taken then
+     */
+    fun catchUp(ctx: Context) {
+        val p = prefs(ctx)
+        val sent = p.getLong(STATUS_SENT, 0)
+        if (sent == 0L || ctx.checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return
+        val date = Telephony.Sms.DATE
+        val rows = try {
+            ctx.contentResolver.query(
+                Telephony.Sms.Inbox.CONTENT_URI, arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, date),
+                "$date >= ? AND $date <= ?", arrayOf("$sent", "${sent + replyTimeout(ctx)}"), "$date ASC",
+            )
+        } catch (e: Exception) {
+            null
+        } ?: return
+        rows.use { c ->
+            // An unknown reply leaves the STATUS waiting: the real one may be next
+            while (p.getLong(STATUS_SENT, 0) == sent && c.moveToNext()) {
+                if (isFromAltox(ctx, c.getString(0))) onReply(ctx, c.getString(1).orEmpty(), c.getLong(2))
+            }
         }
     }
 
@@ -579,17 +609,18 @@ object Heater {
         return if (known) status else null
     }
 
-    fun onReply(ctx: Context, text: String) {
+    /** [at]: when the SMS came, earlier than now if catchUp() found it */
+    fun onReply(ctx: Context, text: String, at: Long = now()) {
         val p = prefs(ctx)
         val s = parse(text)
         if (s == null) {
             // The real reply may still come; if not, the timeout tells this instead of "Нет ответа"
             val unknown = text.trim().take(160)
             p.edit().putString(MESSAGE, "Непонятный ответ Altox:\n$unknown")
-                .putString(UNKNOWN_REPLY, unknown).putLong(UNKNOWN_AT, now()).commit()
+                .putString(UNKNOWN_REPLY, unknown).putLong(UNKNOWN_AT, at).commit()
             return
         }
-        val now = now()
+        val now = at
         // Flickers from START to the first FLAME: YES, or to the reply to the flame STATUS
         val igniting = p.getBoolean(IGNITING, false)
         val flameCheckDone = igniting && p.getLong(FLAME_CHECK_AT, 0) == 0L && p.getString(STATE, OFF) == ON

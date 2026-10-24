@@ -13,7 +13,12 @@
         android:name="android.permission.SCHEDULE_EXACT_ALARM"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    <!-- The result of a command while the app is closed -->
+    <!-- HeaterService: the app is not stopped while it waits for a reply or the end of a run -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- A reply that came while the app was stopped anyway, from the inbox -->
+    <uses-permission android:name="android.permission.READ_SMS" />
 
     <application
         android:allowBackup="true"
@@ -51,6 +56,15 @@
         <receiver
             android:name=".PollReceiver"
             android:exported="false" />
+
+        <service
+            android:name=".HeaterService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Waits for SMS replies of the heater's GSM module during a command or a heating run" />
+        </service>
 
         <!-- Result of sending our own SMS -->
         <receiver
