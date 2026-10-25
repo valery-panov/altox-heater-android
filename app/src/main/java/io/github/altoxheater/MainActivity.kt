@@ -223,13 +223,14 @@ class MainActivity : Activity() {
                 }
             }
             Heater.ON -> {
+                // The time left is on the slider, the ring stays for the hold and for waiting on SMS
                 power.spinning = false
+                power.progress = -1f
                 power.sub = if (prefs.getBoolean(Heater.ERROR, false)) "удерживайте,\nчтобы\u00A0остановить" else ""
                 val endsAt = prefs.getLong(Heater.ENDS_AT, 0)
                 val total = prefs.getLong(Heater.RUN_TOTAL, 0)
                 if (endsAt > 0 && total > 0) {
                     val left = maxOf(endsAt - now, 0)
-                    power.progress = left.toFloat() / total
                     minutesTitle.text = "Осталось"
                     minutesLabel.text = String.format(Locale.US, "%02d мин : %04.1f сек",
                         left / 60_000, left % 60_000 / 1000.0)
@@ -248,7 +249,6 @@ class MainActivity : Activity() {
                     }
                 } else {
                     // Started elsewhere, the run time is unknown
-                    power.progress = -1f
                     minutesTitle.text = "Работает"
                     minutesLabel.text = clock(now - prefs.getLong(Heater.ON_SINCE, now))
                 }
