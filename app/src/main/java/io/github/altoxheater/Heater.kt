@@ -30,6 +30,9 @@ import kotlin.math.abs
  * Off: the finish sound, still on: the error state and the error sound.
  * No flame at the flame STATUS, or no reply to it: one more STATUS FLAME_RECHECK later; still none is an error:
  * the error sound and STOP, again with one STATUS a second later.
+ * The heater puts the flame out by itself once the coolant is hot (about 80C) and waits for it to
+ * cool: FLAME: NO with the coolant HEATED_RISE above the start, or at HOT_COOLANT, is that pause.
+ * HEATER OFF at the STATUS after the end is the end itself, never a failed ignition.
  * The status reply:
  *   HEATER OFF          (HEATER ON while running)
  *   GSM (0-31): 28
@@ -69,6 +72,9 @@ object Heater {
 
     /** A heater that stops this much before the end of the run stopped on its own: a problem */
     private const val EARLY_STOP = 2 * 60_000L
+    /** The coolant this much above the first STATUS of a run, or this hot, means it was burning, C */
+    private const val HEATED_RISE = 10.0
+    private const val HOT_COOLANT = 65.0
     /** Some phones never report the SMS as sent: then count it as sent after this */
     private const val SENT_TIMEOUT = 60_000L
 
@@ -108,6 +114,7 @@ object Heater {
     const val FLAME_CHECK_AT = "flameCheckAt" // the flame STATUS; 0: sent or none
     const val FLAME_RECHECKED = "flameRechecked" // the flame STATUS was repeated
     const val IGNITING = "igniting" // started, no flame seen yet: the icon flickers
+    const val START_COOLANT = "startCoolant" // from the first STATUS of our run, see heated()
     const val ERROR = "error" // still on after the end and our STOP
 
     const val MESSAGE = "message" // the last error, shown until the next command
@@ -223,7 +230,7 @@ object Heater {
     fun isPending(state: String?) = state == STARTING || state == STOPPING
 
     fun start(ctx: Context) {
-        prefs(ctx).edit().putBoolean(IGNITING, true).putBoolean(FLAME_RECHECKED, false).commit()
+        prefs(ctx).edit().putBoolean(IGNITING, true).putBoolean(FLAME_RECHECKED, false).remove(START_COOLANT).commit()
         command(ctx, "START:${minutes(ctx)}", STARTING)
     }
 
@@ -609,6 +616,13 @@ object Heater {
         return if (known) status else null
     }
 
+    /** The coolant shows the heater has been burning: risen since [start], or hot by now */
+    fun heated(coolant: String?, start: String?): Boolean {
+        val c = coolant?.toDoubleOrNull() ?: return false
+        val from = start?.toDoubleOrNull()
+        return c >= HOT_COOLANT || from != null && c - from >= HEATED_RISE
+    }
+
     /** [at]: when the SMS came, earlier than now if catchUp() found it */
     fun onReply(ctx: Context, text: String, at: Long = now()) {
         val p = prefs(ctx)
@@ -621,9 +635,13 @@ object Heater {
             return
         }
         val now = at
+        val state = p.getString(STATE, OFF)
         // Flickers from START to the first FLAME: YES, or to the reply to the flame STATUS
         val igniting = p.getBoolean(IGNITING, false)
-        val flameCheckDone = igniting && p.getLong(FLAME_CHECK_AT, 0) == 0L && p.getString(STATE, OFF) == ON
+        val flameCheckDone = igniting && p.getLong(FLAME_CHECK_AT, 0) == 0L && state == ON
+        val startCoolant = if (state == STARTING) s.coolant else p.getString(START_COOLANT, null)
+        // FLAME: NO in a pause after the coolant got hot is fine
+        val burning = s.flame == true || igniting && heated(s.coolant, startCoolant)
         val e = p.edit()
             .putString(COOLANT, s.coolant.orEmpty())
             .putString(CABIN, s.cabin.orEmpty())
@@ -631,10 +649,9 @@ object Heater {
             .putBoolean(FLAME, s.flame == true)
             .putLong(STATUS_TIME, now)
             .putLong(STATUS_SENT, 0)
-        if (s.flame == true || s.on == false) e.putBoolean(IGNITING, false)
-        if (igniting && s.flame == true) e.remove(MESSAGE) // "Пламени пока нет"
-        val state = p.getString(STATE, OFF)
-        if (flameCheckDone && s.flame != true && s.on != false) {
+        if (burning || s.on == false) e.putBoolean(IGNITING, false)
+        if (igniting && burning) e.remove(MESSAGE).putLong(FLAME_CHECK_AT, 0) // "Пламени нет..., ещё проверка"
+        if (flameCheckDone && !burning && s.on != false) {
             e.commit()
             flameMissing(ctx, "Пламени нет")
             return
@@ -652,7 +669,8 @@ object Heater {
                 val sentAt = p.getLong(CMD_SENT_AT, 0).takeIf { it > 0 } ?: now
                 e.putString(STATE, ON).putLong(ON_SINCE, sentAt).putBoolean(END_CHECKED, false)
                     .putLong(RUN_TOTAL, run).putLong(ENDS_AT, sentAt + run).putLong(POLL_AT, 0)
-                    .putLong(FLAME_CHECK_AT, if (s.flame == true) 0 else sentAt + flameDelay(ctx))
+                    .putLong(FLAME_CHECK_AT, if (burning) 0 else sentAt + flameDelay(ctx))
+                    .putString(START_COOLANT, s.coolant)
             }
             state == STOPPING && s.on == false -> {
                 e.putString(STATE, OFF).putLong(POLL_AT, 0).putString(FORCED_STOP, "")
@@ -692,9 +710,10 @@ object Heater {
             }
             s.on == false -> {
                 e.putString(STATE, OFF).putBoolean(ERROR, false)
-                if (state == ON && p.getBoolean(END_CHECKED, false)) sound = FINISH_SOUND
+                val ended = p.getBoolean(END_CHECKED, false)
+                if (state == ON && ended) sound = FINISH_SOUND
                 val endsAt = p.getLong(ENDS_AT, 0)
-                if (state == ON && igniting) {
+                if (state == ON && igniting && !burning && !ended) {
                     // Webasto gives up on a failed ignition and switches off
                     e.putString(MESSAGE, "Отопитель выключился, так и не разгоревшись")
                     sound = ERROR_SOUND

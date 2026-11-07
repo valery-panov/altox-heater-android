@@ -16,8 +16,9 @@ import kotlin.math.sin
  * The flame icon, the shapes of ic_flame in a 40x40 box: the outer flame, the middle one and the
  * core at the wick. [mode] picks the picture:
  *   OFF       the outer outline
- *   IGNITING  the outline, the core rises from the wick again and again, flickering
- *   BURNING   all three filled, swaying and stretching slowly, each at its own pace
+ *   IGNITING  the outline, the core rises from the wick again and again, eased, and fades away
+ *   BURNING   all three filled, swaying and stretching slowly, each at its own pace; the core
+ *             flickers, taller and shorter, brighter and dimmer
  *   STOPPING  the outline, the core sinks back into the wick, greyish: ignition in reverse
  *   ERROR     the outline with a question mark over it
  */
@@ -78,17 +79,22 @@ class FlameView(ctx: Context, attrs: AttributeSet? = null) : View(ctx, attrs) {
                     1 + 0.04f * wave(t, 1.7, 2.9), 0.035f * wave(t, 2.3, 3.7))
                 layer(canvas, middle, 0xFFFFB300.toInt(), 255,
                     1 + 0.07f * wave(t + 0.6, 1.3, 2.1), 0.05f * wave(t + 1.1, 1.9, 3.1))
-                layer(canvas, core, 0xFFFFF3C4.toInt(), 255,
-                    1 + 0.10f * wave(t + 0.3, 0.9, 1.6), 0.04f * wave(t + 0.4, 1.4, 2.3))
+                // The core lives faster than the rest: the visible flicker
+                layer(canvas, core, 0xFFFFF3C4.toInt(), (215 + 40 * wave(t, 0.43, 0.71)).toInt(),
+                    1 + 0.22f * wave(t + 0.3, 0.61, 0.97), 0.06f * wave(t + 0.4, 0.83, 1.3),
+                    1 + 0.08f * wave(t + 0.2, 0.53, 0.89))
                 postInvalidateOnAnimation()
             }
             Mode.IGNITING -> {
                 canvas.drawPath(outer, outline)
-                // Rises from the wick over a cycle and flickers on the way
-                val p = (t % CYCLE / CYCLE).toFloat()
-                val flicker = 0.75f + 0.25f * (sin(t * 52) * sin(t * 21)).toFloat()
-                val alpha = (minOf(p * 4, 1f) * flicker * 255).toInt()
-                layer(canvas, core, 0xFFFFB300.toInt(), alpha, 0.3f + 0.9f * p, 0f, 0.5f + 0.5f * p)
+                // Rises from the wick over a cycle, slowing down near the top, and fades out before
+                // the next one, so the restart does not jump; the flicker is slow enough to see
+                val p = (t % IGNITE_CYCLE / IGNITE_CYCLE).toFloat()
+                val rise = 1 - (1 - p) * (1 - p)
+                val fade = smooth(p / 0.25f) * smooth((1 - p) / 0.3f)
+                val flicker = 0.85f + 0.15f * wave(t, 0.37, 0.23)
+                layer(canvas, core, 0xFFFFB300.toInt(), (fade * flicker * 255).toInt(),
+                    0.3f + 0.9f * rise, 0.03f * wave(t, 0.9, 1.4), 0.5f + 0.5f * rise)
                 postInvalidateOnAnimation()
             }
             Mode.STOPPING -> {
@@ -118,13 +124,20 @@ class FlameView(ctx: Context, attrs: AttributeSet? = null) : View(ctx, attrs) {
         canvas.restore()
     }
 
+    /** 0 to 1 with a gentle start and end, flat outside 0..1 */
+    private fun smooth(x: Float): Float {
+        val c = x.coerceIn(0f, 1f)
+        return c * c * (3 - 2 * c)
+    }
+
     private fun wave(t: Double, a: Double, b: Double) =
         (0.6 * sin(2 * PI * t / a) + 0.4 * sin(2 * PI * t / b)).toFloat()
 
     companion object {
         private const val WICK_X = 20f
         private const val WICK_Y = 38f
-        private const val CYCLE = 1.1 // s, one rise or sink of the core
+        private const val CYCLE = 1.1 // s, one sink of the core
+        private const val IGNITE_CYCLE = 1.6 // s, one rise of the core
         private const val OUTLINE = 0xFF8A9096.toInt()
         private const val STOPPING_GREY = 0xFFB0B6BC.toInt()
 

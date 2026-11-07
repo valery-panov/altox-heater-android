@@ -465,6 +465,52 @@ class UiTest {
         assertEquals(0L, Heater.nextWake(app))
     }
 
+    /** Warm weather: hot water by the flame STATUS, the flame already out, a pause; the end is fine */
+    @Test fun pauseWhenHot() {
+        configure(periodic = 0)
+        val a = launch()
+        power(a).performClick()
+        Heater.commandSent(app)
+        val start = time
+        advance(1_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 20))
+        advance(start + 240_000 - time)
+        assertEquals("STATUS", lastSms())
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 78))
+        idle()
+        assertEquals("", text(a, R.id.message))
+        assertEquals("Пауза: вода нагрета до 78 °C, пламя погашено до остывания", text(a, R.id.caption))
+        assertEquals(FlameView.Mode.OFF, flame(a).mode)
+        val endsAt = Heater.prefs(app).getLong(Heater.ENDS_AT, 0)
+        assertEquals(endsAt + 30_000, nextAlarm()) // no second flame STATUS
+        advance(endsAt + 30_000 - time)
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 72))
+        idle()
+        assertEquals("Пуск", power(a).label)
+        assertEquals("", text(a, R.id.message))
+        assertEquals(listOf(Heater.FINISH_SOUND), sounds)
+    }
+
+    /** Off at the end with no FLAME: YES ever seen and the coolant barely warmer: still the end, fine */
+    @Test fun endWithoutFlameSeen() {
+        configure(periodic = 0)
+        val a = launch()
+        power(a).performClick()
+        Heater.commandSent(app)
+        advance(1_500)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 45))
+        // However the flame STATUS went, the run reaches its end still "igniting"
+        Heater.prefs(app).edit().putLong(Heater.FLAME_CHECK_AT, 0).commit()
+        val endsAt = Heater.prefs(app).getLong(Heater.ENDS_AT, 0)
+        advance(endsAt + 30_000 - time)
+        assertEquals("STATUS", lastSms())
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 50))
+        idle()
+        assertEquals("Пуск", power(a).label)
+        assertEquals("", text(a, R.id.message))
+        assertEquals(listOf(Heater.FINISH_SOUND), sounds)
+    }
+
     /** No flame by the flame STATUS: one more a minute later; flame then is fine */
     @Test fun slowFlame() {
         configure(periodic = 0)

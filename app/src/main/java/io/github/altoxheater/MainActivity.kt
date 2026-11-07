@@ -167,6 +167,7 @@ class MainActivity : Activity() {
             state == Heater.STARTING -> "Запуск отопителя"
             state == Heater.STOPPING -> "Остановка отопителя"
             error -> "Отопитель не выключается"
+            paused() -> "Пауза: вода нагрета до ${prefs.getString(Heater.COOLANT, "")} °C, пламя погашено до остывания"
             state == Heater.ON -> "Нагрев запущен"
             prefs.contains(Heater.PREV_STATE) -> "Нагрев выключен"
             else -> ""
@@ -269,6 +270,7 @@ class MainActivity : Activity() {
             // Our STOP, or the run is over and the STATUS after it should show the heater off
             state == Heater.STOPPING || state == Heater.ON && endsAt in 1..now -> FlameView.Mode.STOPPING
             state == Heater.STARTING -> FlameView.Mode.IGNITING
+            paused() -> FlameView.Mode.OFF
             state == Heater.ON -> if (prefs.getBoolean(Heater.FLAME, false)) FlameView.Mode.BURNING else FlameView.Mode.IGNITING
             else -> FlameView.Mode.OFF
         }
@@ -280,6 +282,11 @@ class MainActivity : Activity() {
             status.sub = ""
         }
     }
+
+    /** On, no flame, the coolant hot: the heater waits for it to cool, see Heater.heated() */
+    private fun paused() = prefs.getString(Heater.STATE, Heater.OFF) == Heater.ON &&
+        !prefs.getBoolean(Heater.FLAME, false) &&
+        Heater.heated(prefs.getString(Heater.COOLANT, ""), prefs.getString(Heater.START_COOLANT, null))
 
     private fun igniting() = prefs.getBoolean(Heater.IGNITING, false) &&
         prefs.getString(Heater.STATE, Heater.OFF).let { it == Heater.STARTING || it == Heater.ON }
