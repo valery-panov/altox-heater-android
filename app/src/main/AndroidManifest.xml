@@ -17,6 +17,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- HeaterService keeps the CPU awake during a run, so the STATUS SMS leave on time with the screen off -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Asks at start to be left out of battery optimisation: the system then does not stop the
+         app in the background and lets it start HeaterService from an alarm -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- A reply that came while the app was stopped anyway, from the inbox -->
     <uses-permission android:name="android.permission.READ_SMS" />
 

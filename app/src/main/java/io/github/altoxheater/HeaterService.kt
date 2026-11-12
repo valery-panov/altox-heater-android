@@ -10,17 +10,40 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
 import java.util.Calendar
 import java.util.Locale
 
 /**
  * A foreground service while Heater waits for something (a reply, a planned STATUS, the end of
- * a run): with it the system does not stop the app when it is closed or swiped away, so the
- * replies and the alarms still reach it. Does nothing itself but show the state in its notification.
+ * a run): the daemon that runs the run while the app is closed. It keeps the process alive and
+ * the CPU awake (a partial wake lock, honoured in Doze for a foreground service) and calls
+ * Heater.tick() itself every second, so the STATUS SMS leave on time without relying on alarms,
+ * which the system delays or drops for a closed app. The alarms stay as a backup. Its
+ * notification shows the state.
  */
 class HeaterService : Service() {
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> show() }
+    private val handler = Handler(Looper.getMainLooper())
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var beats = 0
+    private val beat = object : Runnable {
+        override fun run() {
+            // A reply SmsReceiver missed, from the inbox; not every second, it is a query
+            if (beats++ % CATCH_UP_EVERY == 0) Heater.catchUp(this@HeaterService)
+            Heater.tick(this@HeaterService)
+            if (Heater.nextWake(this@HeaterService) == 0L) {
+                stopSelf()
+                return
+            }
+            // A run lasts up to 2 hours: renew the lock with a timeout rather than hold it unbounded
+            wakeLock?.acquire(LOCK_MS)
+            handler.postDelayed(this, BEAT_MS)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -28,9 +51,16 @@ class HeaterService : Service() {
         super.onCreate()
         running = true
         Heater.prefs(this).registerOnSharedPreferenceChangeListener(listener)
+        wakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AltoxHeater:run")
+            .apply { setReferenceCounted(false); acquire(LOCK_MS) }
+        handler.postDelayed(beat, BEAT_MS)
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(beat)
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
         Heater.prefs(this).unregisterOnSharedPreferenceChangeListener(listener)
         running = false
         super.onDestroy()
@@ -100,6 +130,9 @@ class HeaterService : Service() {
     companion object {
         private const val ID = 1
         private const val CHANNEL = "run"
+        private const val BEAT_MS = 1_000L
+        private const val CATCH_UP_EVERY = 10
+        private const val LOCK_MS = 60_000L
         /** The service is up in this process */
         var running = false
             private set

@@ -92,6 +92,7 @@ object Heater {
     const val FINISH_SOUND = "finishSound" // ringtone URI, "" silent, missing: the first of ownSounds()
     const val ERROR_SOUND = "errorSound"
     const val PERIODIC = "periodic" // before v1.14: a checkbox, PERIODIC_COUNT only while it was on
+    const val LAUNCH_DONE = "launchDone" // the user set up the vendor's launch manager, see MainActivity.checkBackground()
     const val PERIODIC_COUNT = "periodicCount" // per run: 0, PERIODIC_RANGE or PERIODIC_AUTO
 
     // Command in progress

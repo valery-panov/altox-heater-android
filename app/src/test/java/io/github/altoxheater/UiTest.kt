@@ -33,6 +33,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowAlertDialog
+import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.time.Duration
 
@@ -47,6 +48,7 @@ import java.time.Duration
 class UiTest {
     private val app: Application = RuntimeEnvironment.getApplication()
     private var time = 0L
+    private val manufacturer = android.os.Build.MANUFACTURER
     private val sounds = mutableListOf<String>()
 
     @Before fun setUp() {
@@ -58,10 +60,15 @@ class UiTest {
         shadowOf(app).grantPermissions(
             Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_PHONE_STATE,
         )
+        battery(exempt = true)
     }
+
+    private fun battery(exempt: Boolean) =
+        shadowOf(app.getSystemService(android.os.PowerManager::class.java)).setIgnoringBatteryOptimizations(app.packageName, exempt)
 
     @After fun tearDown() {
         Heater.clock = System::currentTimeMillis
+        ReflectionHelpers.setStaticField(android.os.Build::class.java, "MANUFACTURER", manufacturer)
     }
 
     @Test fun notConfigured() {
@@ -883,6 +890,56 @@ class UiTest {
             idle()
             assertEquals(0L, Heater.nextWake(app))
             assertEquals(HeaterService::class.java.name, shadowOf(app).nextStoppedService.component!!.className)
+        } finally {
+            service.destroy()
+        }
+    }
+
+    /** At start: battery optimisation off, then the launch manager on Honor until it is said to be done */
+    @Test fun backgroundSetup() {
+        configure()
+        shadowOf(app).grantPermissions(Manifest.permission.READ_SMS, Manifest.permission.POST_NOTIFICATIONS)
+        ReflectionHelpers.setStaticField(android.os.Build::class.java, "MANUFACTURER", "HONOR")
+        battery(exempt = false)
+        var a = launch()
+        var dialog = ShadowAlertDialog.getLatestAlertDialog()
+        assertTrue(dialog.isShowing)
+        assertEquals("Работа в фоне", shadowOf(dialog).title)
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+        idle()
+        assertEquals(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, shadowOf(a).nextStartedActivity.action)
+
+        battery(exempt = true)
+        a = launch()
+        dialog = ShadowAlertDialog.getLatestAlertDialog()
+        assertEquals("Запуск приложений", shadowOf(dialog).title)
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+        idle()
+        assertEquals("com.hihonor.systemmanager", shadowOf(a).nextStartedActivity.component!!.packageName)
+        dialog = ShadowAlertDialog.getLatestAlertDialog()
+        launch()
+        assertTrue(ShadowAlertDialog.getLatestAlertDialog() !== dialog)
+        ShadowAlertDialog.getLatestAlertDialog().getButton(DialogInterface.BUTTON_NEUTRAL).performClick()
+        idle()
+        ShadowAlertDialog.reset()
+        launch()
+        assertEquals(null, ShadowAlertDialog.getLatestAlertDialog())
+    }
+
+    /** The app is closed and the alarms never come: the service itself sends the STATUS when due */
+    @Test fun serviceSendsWithoutAlarms() {
+        configure(periodic = 0)
+        Heater.prefs(app).edit().putString(Heater.STATE, Heater.ON).putLong(Heater.ON_SINCE, time)
+            .putLong(Heater.RUN_TOTAL, 30 * 60_000L).putLong(Heater.ENDS_AT, time + 30 * 60_000L)
+            .putLong(Heater.FLAME_CHECK_AT, time + 60_000).commit()
+        val service = Robolectric.buildService(HeaterService::class.java).create().startCommand(0, 1)
+        try {
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(2))
+            assertEquals(null, lastSms())
+            time += 61_000
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(2))
+            assertEquals("STATUS", lastSms())
+            assertTrue(Heater.prefs(app).getLong(Heater.STATUS_SENT, 0) > 0)
         } finally {
             service.destroy()
         }

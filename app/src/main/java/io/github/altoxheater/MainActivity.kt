@@ -2,6 +2,8 @@ package io.github.altoxheater
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ComponentName
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
@@ -10,6 +12,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
+import android.net.Uri
 import android.view.View
 import android.widget.SeekBar
 import android.widget.TextView
@@ -32,6 +37,7 @@ class MainActivity : Activity() {
 
     private val prefs by lazy { Heater.prefs(this) }
     private var sliderEditable = false
+    private var setupDialog: AlertDialog? = null
     private val handler = Handler(Looper.getMainLooper())
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> render() }
     private val frame = object : Runnable {
@@ -94,12 +100,15 @@ class MainActivity : Activity() {
         // Looks active all the time (it shows the time left), but takes touches only when idle
         minutes.setOnTouchListener { _, _ -> !sliderEditable }
 
-        // READ_SMS: a reply that came while the app was stopped, see Heater.catchUp(); notifications: HeaterService's
-        val wanted = listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS) +
-            if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
-        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        val missing = missingPermissions()
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
+
+    /** READ_SMS: a reply that came while the app was stopped, see Heater.catchUp(); notifications: HeaterService's */
+    private fun missingPermissions() =
+        (listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS) +
+            if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList())
+            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
 
     override fun onResume() {
         super.onResume()
@@ -109,6 +118,7 @@ class MainActivity : Activity() {
         Heater.scheduleWake(this)
         render()
         handler.post(frame)
+        checkBackground()
     }
 
     override fun onPause() {
@@ -123,6 +133,64 @@ class MainActivity : Activity() {
         if (missing.isEmpty()) return true
         requestPermissions(missing.toTypedArray(), 1)
         return false
+    }
+
+    /**
+     * At each start, after the permissions: what lets a closed app send the SMS of a run (see
+     * HeaterService). Battery optimisation is checked through the system; the vendor's own
+     * launch manager (Honor, Huawei) cannot be read, so its dialog shows until the user says it is done
+     */
+    private fun checkBackground() {
+        if (setupDialog?.isShowing == true || missingPermissions().isNotEmpty()) return
+        val launch = launchManager()
+        setupDialog = when {
+            !getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName) ->
+                AlertDialog.Builder(this)
+                    .setTitle("Работа в фоне")
+                    .setMessage("Чтобы во время нагрева SMS отправлялись и при закрытом приложении, " +
+                        "разрешите ему работать без ограничений батареи.")
+                    .setPositiveButton("Разрешить") { _, _ -> open(
+                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
+                        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                    ) }
+                    .setNegativeButton("Позже", null)
+                    .show()
+            launch != null && !prefs.getBoolean(Heater.LAUNCH_DONE, false) ->
+                AlertDialog.Builder(this)
+                    .setTitle("Запуск приложений")
+                    .setMessage("${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} останавливает закрытые приложения, " +
+                        "и SMS во время нагрева не уходят. В «Запуске приложений» выключите для ${getString(R.string.app_name)} " +
+                        "«Управлять автоматически» и оставьте включёнными все три переключателя: " +
+                        "автозапуск, косвенный запуск и работа в фоне.")
+                    .setPositiveButton("Открыть") { _, _ -> open(launch, appDetails()) }
+                    .setNeutralButton("Уже настроено") { _, _ -> prefs.edit().putBoolean(Heater.LAUNCH_DONE, true).apply() }
+                    .setNegativeButton("Позже", null)
+                    .show()
+            else -> null
+        }
+    }
+
+    /** The launch manager screen on Honor and Huawei, where a closed app may be allowed to run; null elsewhere */
+    private fun launchManager(): Intent? {
+        val pkg = when (Build.MANUFACTURER.lowercase()) {
+            "honor" -> "com.hihonor.systemmanager"
+            "huawei" -> "com.huawei.systemmanager"
+            else -> return null
+        }
+        return Intent().setComponent(ComponentName(pkg, "$pkg.startupmgr.ui.StartupNormalAppListActivity"))
+    }
+
+    private fun appDetails() = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+
+    /** The first of [intents] that opens */
+    private fun open(vararg intents: Intent) {
+        for (i in intents) {
+            try {
+                startActivity(i)
+                return
+            } catch (e: Exception) {
+            }
+        }
     }
 
     /** Everything that changes with the state; the ticking parts are in renderFrame */
@@ -347,7 +415,7 @@ class MainActivity : Activity() {
         /** Slider units per step of the scale */
         const val STEP = 100
         /** How long to hold Пуск/Стоп and Статус */
-        const val HOLD_MS = 1_000L
+        const val HOLD_MS = 750L
         private val MONTHS = listOf("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
     }
 }
