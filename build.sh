@@ -18,7 +18,8 @@ export ANDROID_KEYSTORE=${ANDROID_KEYSTORE:-$PWD/release.jks}
 [[ -f "$ANDROID_KEYSTORE" && -n "${ANDROID_KEYSTORE_PASSWORD:-}" ]] \
   || { echo "no signing key: $ANDROID_KEYSTORE and ANDROID_KEYSTORE_PASSWORD in secrets.env" >&2; exit 1; }
 
-VERSION=$(sed -n 's/^ *versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
+VERSION=$(sed -n 's/^val appVersion = "\(.*\)"/\1/p' app/build.gradle.kts)
+[[ -n "$VERSION" ]] || { echo "no appVersion in app/build.gradle.kts" >&2; exit 1; }
 gradle -q --console=plain assembleRelease
 mkdir -p dist
 APK=dist/altox-heater-$VERSION.apk

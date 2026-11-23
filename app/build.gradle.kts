@@ -5,6 +5,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// The one place to bump for a release; build.sh reads it too
+val appVersion = "1.25"
+
 android {
     namespace = "io.github.altoxheater"
     compileSdk = 36
@@ -14,8 +17,9 @@ android {
         applicationId = "io.github.altoxheater"
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "1.24"
+        // major * 100 + minor: 1.24 -> 124. Must only grow (v1.24 went out as 25); minor stays under 100
+        versionCode = appVersion.split(".").let { it[0].toInt() * 100 + it[1].toInt() }
+        versionName = appVersion
     }
 
     // The key and its password are not in git, see build.sh
