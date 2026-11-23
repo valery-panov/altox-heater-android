@@ -16,6 +16,8 @@ class SentReceiver : BroadcastReceiver() {
         when (intent.getStringExtra(KIND)) {
             Heater.KIND_COMMAND -> Heater.commandFailed(ctx, message)
             Heater.KIND_STATUS -> Heater.statusFailed(ctx, message)
+            Heater.KIND_READ -> Heater.readFailed(ctx, message)
+            Heater.KIND_ERASE -> Heater.eraseFailed(ctx, message)
         }
     }
 

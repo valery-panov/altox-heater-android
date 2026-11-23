@@ -163,6 +163,27 @@
             android:id="@+id/errorSound"
             style="@style/SoundPicker" />
 
+        <!-- What the last READ got; the buttons send READ, or ERASE and then READ -->
+        <TextView style="@style/Label" android:text="@string/fault_codes" />
+
+        <TextView
+            android:id="@+id/faultsInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/readFaults"
+            style="@style/SoundPicker"
+            android:text="@string/read_faults" />
+
+        <TextView
+            android:id="@+id/eraseFaults"
+            style="@style/SoundPicker"
+            android:text="@string/erase_faults" />
+
         <Button
             android:id="@+id/save"
             android:layout_width="match_parent"

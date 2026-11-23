@@ -186,7 +186,8 @@ class UiTest {
         }
         idle()
         assertEquals(Heater.OFF, Heater.prefs(app).getString(Heater.STATE, ""))
-        assertEquals("Отопитель не запустился", a.findViewById<android.widget.TextView>(R.id.message).text)
+        assertEquals("Отопитель не запустился\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
+        assertEquals("READ", lastSms())
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
         assertTrue("polls: $polls", polls in 3..5)
         shot(a, "11-start-failed")
@@ -208,8 +209,126 @@ class UiTest {
         configure()
         val a = launch()
         Heater.onReply(app, "Баланс 120 руб.")
+        Heater.onReply(app, "Неверная команда: STRAT:20")
         idle()
-        assertTrue(a.findViewById<android.widget.TextView>(R.id.message).text.startsWith("Непонятный ответ"))
+        assertEquals("", text(a, R.id.message))
+        assertEquals("Пуск", power(a).label)
+        assertTrue(sounds.isEmpty())
+    }
+
+    /** Off while igniting: READ, its reply under the message; "none" says so; the next START clears it */
+    @Test fun faultCodes() {
+        configure(periodic = 0)
+        val a = launch()
+        startedWithoutFlame(a)
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 14))
+        idle()
+        assertEquals("READ", lastSms())
+        Heater.onReply(app, "Webasto diagnostics\nFault code: none")
+        idle()
+        assertEquals("Отопитель выключился, так и не разгоревшись\nКоды ошибок Webasto: нет", text(a, R.id.message))
+        // Sent once per error
+        Heater.onReply(app, "Webasto diagnostics\nFault code: 84")
+        idle()
+        assertEquals("Отопитель выключился, так и не разгоревшись\nКоды ошибок Webasto: нет", text(a, R.id.message))
+        power(a).performClick()
+        idle()
+        assertEquals("", text(a, R.id.message))
+    }
+
+    /** The codes the previous READ did not get are marked new; unknown ones shown as is */
+    @Test fun faultCodesNew() {
+        configure(periodic = 0)
+        Heater.prefs(app).edit().putString(Heater.LAST_FAULTS, "12").commit()
+        val a = launch()
+        startedWithoutFlame(a)
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 14))
+        Heater.onReply(app, "Webasto diagnostics\nFault code: 84, 12, 1c")
+        idle()
+        assertEquals("Отопитель выключился, так и не разгоревшись\nКоды ошибок Webasto:\n" +
+            "84 — напряжение питания слишком низкое (новая)\n12 — сбой связи по W-Bus\n1C (новая)", text(a, R.id.message))
+        assertEquals("84, 12, 1C", Heater.prefs(app).getString(Heater.LAST_FAULTS, ""))
+    }
+
+    /** The settings' button: ERASE, READ 10 s later, its reply under the button */
+    @Test fun eraseFaults() {
+        configure()
+        Heater.prefs(app).edit().putString(Heater.LAST_FAULTS, "84, 12").commit()
+        val s = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
+        val button = s.findViewById<android.widget.TextView>(R.id.eraseFaults)
+        assertTrue(text(s, R.id.faultsInfo).endsWith(":\n84 — напряжение питания слишком низкое\n12 — сбой связи по W-Bus"))
+        Heater.eraseFaults(app)
+        idle()
+        assertEquals("ERASE", lastSms())
+        assertFalse(button.isEnabled)
+        assertTrue(text(s, R.id.faultsInfo).endsWith("Отправлена команда ERASE"))
+        assertEquals(time + Heater.ERASE_READ_DELAY, Heater.nextWake(app))
+        time += Heater.ERASE_READ_DELAY
+        Heater.tick(app)
+        assertEquals("READ", lastSms())
+        Heater.onReply(app, "Webasto diagnostics\nFault code: none")
+        idle()
+        assertTrue(text(s, R.id.faultsInfo).endsWith(": нет\nКоды ошибок стёрты"))
+        assertTrue(button.isEnabled)
+        // Not an error of the main screen
+        assertFalse(Heater.prefs(app).contains(Heater.FAULTS))
+        assertEquals(0L, Heater.nextWake(app))
+    }
+
+    /** The settings' READ: the codes under the button, the ones not in the previous READ marked new */
+    @Test fun readFaultsNow() {
+        configure()
+        Heater.prefs(app).edit().putString(Heater.LAST_FAULTS, "12").commit()
+        val s = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
+        val read = s.findViewById<android.widget.TextView>(R.id.readFaults)
+        s.findViewById<android.widget.TextView>(R.id.readFaults).performClick()
+        idle()
+        assertEquals("READ", lastSms())
+        assertFalse(read.isEnabled)
+        assertFalse(s.findViewById<android.widget.TextView>(R.id.eraseFaults).isEnabled)
+        assertTrue(text(s, R.id.faultsInfo).endsWith("Отправлена команда READ"))
+        Heater.onReply(app, "Webasto diagnostics\nFault code: 84, 12")
+        idle()
+        assertTrue(text(s, R.id.faultsInfo), text(s, R.id.faultsInfo)
+            .endsWith(":\n84 — напряжение питания слишком низкое (новая)\n12 — сбой связи по W-Bus"))
+        assertTrue(read.isEnabled)
+        // Not an error of the main screen
+        assertFalse(Heater.prefs(app).contains(Heater.FAULTS))
+        assertEquals(0L, Heater.nextWake(app))
+    }
+
+    /** No reply to the READ after ERASE: told under the button */
+    @Test fun eraseFaultsNoReply() {
+        configure()
+        val s = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
+        Heater.eraseFaults(app)
+        time += Heater.ERASE_READ_DELAY
+        Heater.tick(app)
+        time += Heater.replyTimeout(app) + 1_000
+        Heater.tick(app)
+        idle()
+        assertTrue(text(s, R.id.faultsInfo).endsWith("Нет ответа на READ"))
+        assertTrue(s.findViewById<android.widget.TextView>(R.id.eraseFaults).isEnabled)
+    }
+
+    /** READ without a reply: the line goes away, no error of its own */
+    @Test fun faultCodesNoReply() {
+        configure(periodic = 0)
+        val a = launch()
+        startedWithoutFlame(a)
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 14))
+        advance(Heater.replyTimeout(app) + 1_000)
+        assertEquals("Отопитель выключился, так и не разгоревшись", text(a, R.id.message))
+        assertEquals(listOf(Heater.ERROR_SOUND), sounds)
+    }
+
+    /** Fault codes nobody asked for: ignored */
+    @Test fun faultCodesUnasked() {
+        configure()
+        val a = launch()
+        Heater.onReply(app, "Webasto diagnostics\nFault code: 84, 12")
+        idle()
+        assertEquals("", text(a, R.id.message))
     }
 
     /** A 12-minute run takes the whole width: right edge at the start, left at the end */
@@ -541,16 +660,21 @@ class UiTest {
         idle()
         assertEquals("STOP", lastSms())
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
-        assertEquals("Пламени нет через 5 мин после пуска, отправлен STOP", text(a, R.id.message))
+        assertEquals("Пламени нет через 5 мин после пуска, отправлен STOP\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
         Heater.commandSent(app)
         advance(1_500)
         assertEquals("STATUS", lastSms())
         Heater.onReply(app, reply(on = false, flame = false, coolant = 14))
         idle()
         assertEquals("Пуск", power(a).label)
-        assertEquals("Пламени нет через 5 мин после пуска, отопитель остановлен", text(a, R.id.message))
+        assertEquals("Пламени нет через 5 мин после пуска, отопитель остановлен\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
-        assertEquals(0L, Heater.nextWake(app))
+        // Only the timeout of the READ for the fault codes
+        assertEquals(Heater.prefs(app).getLong(Heater.READ_SENT, 0) + Heater.replyTimeout(app) + 1, Heater.nextWake(app))
+        Heater.onReply(app, "Webasto diagnostics\nFault code: 84, 12")
+        idle()
+        assertEquals("Пламени нет через 5 мин после пуска, отопитель остановлен\nКоды ошибок Webasto:\n" +
+            "84 — напряжение питания слишком низкое\n12 — сбой связи по W-Bus", text(a, R.id.message))
         shot(a, "16-no-flame")
     }
 
@@ -565,7 +689,7 @@ class UiTest {
         Heater.onReply(app, reply(on = true, flame = false, coolant = 14))
         idle()
         assertEquals("Ошибка", power(a).label)
-        assertEquals("Нет пламени, и отопитель не выключился после команды STOP", text(a, R.id.message))
+        assertEquals("Нет пламени, и отопитель не выключился после команды STOP\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
         assertEquals(listOf(Heater.ERROR_SOUND, Heater.ERROR_SOUND), sounds)
     }
 
@@ -577,7 +701,7 @@ class UiTest {
         Heater.onReply(app, reply(on = false, flame = false, coolant = 14))
         idle()
         assertEquals("Пуск", power(a).label)
-        assertEquals("Отопитель выключился, так и не разгоревшись", text(a, R.id.message))
+        assertEquals("Отопитель выключился, так и не разгоревшись\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
     }
 
@@ -618,25 +742,23 @@ class UiTest {
         assertEquals("STATUS", lastSms())
         advance(Heater.replyTimeout(app) + 1_000)
         assertEquals("STOP", lastSms())
-        assertEquals("Нет ответа о пламени через 5 мин после пуска, отправлен STOP", text(a, R.id.message))
+        assertEquals("Нет ответа о пламени через 5 мин после пуска, отправлен STOP\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
     }
 
-    /** Something unparsable instead of the reply: the timeout shows it, not "Нет ответа" */
-    @Test fun unknownReplyThenTimeout() {
+    /** Something unparsable before the reply: ignored, the reply that follows is taken */
+    @Test fun unknownSmsThenReply() {
         configure()
         val a = launch()
         power(a).performClick()
         Heater.commandSent(app)
         advance(1_500)
-        Heater.onReply(app, "ERROR 17")
-        advance(Heater.replyTimeout(app) + 1_000)
-        assertEquals("Пуск", power(a).label)
-        assertEquals("Непонятный ответ Altox:\nERROR 17", text(a, R.id.message))
-        // An old one does not explain a later timeout
-        status(a).performClick()
-        advance(Heater.replyTimeout(app) + 1_000)
-        assertEquals("Нет ответа на запрос статуса", text(a, R.id.message))
+        Heater.onReply(app, "Баланс 120 руб.")
+        advance(1_000)
+        Heater.onReply(app, "HEATER ON 20 MIN\nHEATER: 7C\nFLAME: NO")
+        idle()
+        assertEquals("Стоп", power(a).label)
+        assertEquals("", text(a, R.id.message))
     }
 
     /** A reply without HEATER ON/OFF while starting: asked again, not stuck */
@@ -675,7 +797,8 @@ class UiTest {
         Heater.onReply(app, reply(on = false, flame = false, coolant = 60))
         assertEquals(Heater.OFF, Heater.prefs(app).getString(Heater.STATE, ""))
         assertEquals(listOf(Heater.FINISH_SOUND), sounds)
-        assertEquals(0L, Heater.nextWake(app))
+        // Only the timeout of the READ for the fault codes
+        assertEquals(Heater.prefs(app).getLong(Heater.READ_SENT, 0) + Heater.replyTimeout(app) + 1, Heater.nextWake(app))
     }
 
     /** Still on after our STOP too: the error state, the error sound; a tap sends STOP again */
@@ -690,7 +813,7 @@ class UiTest {
         assertEquals("Ошибка", power(a).label)
         assertEquals(FlameView.Mode.ERROR, flame(a).mode)
         assertTrue(power(a).isEnabled)
-        assertEquals("Отопитель не выключился в конце цикла и после команды STOP", text(a, R.id.message))
+        assertEquals("Отопитель не выключился в конце цикла и после команды STOP\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
         shot(a, "15-stop-failed")
         power(a).performClick()
         idle()
@@ -758,9 +881,10 @@ class UiTest {
         Heater.onReply(app, reply(on = false, flame = false, coolant = 40))
         idle()
         assertEquals("Пуск", power(a).label)
-        assertEquals("Отопитель выключился раньше срока, за 20 мин до конца", text(a, R.id.message))
+        assertEquals("Отопитель выключился раньше срока, за 20 мин до конца\nЗапрошены коды ошибок Webasto", text(a, R.id.message))
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
-        assertEquals(0L, Heater.nextWake(app))
+        // Only the timeout of the READ for the fault codes
+        assertEquals(Heater.prefs(app).getLong(Heater.READ_SENT, 0) + Heater.replyTimeout(app) + 1, Heater.nextWake(app))
     }
 
     /** A number from the contacts, without the spaces and dashes */

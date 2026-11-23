@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.Ringtone
 import android.media.RingtoneManager
@@ -22,6 +23,9 @@ import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class SettingsActivity : Activity() {
     private lateinit var phone: EditText
@@ -36,11 +40,15 @@ class SettingsActivity : Activity() {
     private lateinit var finishSound: TextView
     private lateinit var errorSound: TextView
     private lateinit var saveButton: Button
+    private lateinit var faultsInfo: TextView
+    private lateinit var readFaults: TextView
+    private lateinit var eraseFaults: TextView
     /** Picked sounds, saved with the rest: "" silent */
     private var finishUri = ""
     private var errorUri = ""
 
     private val prefs by lazy { Heater.prefs(this) }
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> renderFaults() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +82,11 @@ class SettingsActivity : Activity() {
         findViewById<ImageButton>(R.id.pickContact).setOnClickListener { pickContact() }
         saveButton = findViewById(R.id.save)
         saveButton.setOnClickListener { save() }
+        faultsInfo = findViewById(R.id.faultsInfo)
+        readFaults = findViewById(R.id.readFaults)
+        readFaults.setOnClickListener { if (canSend()) Heater.readFaultsNow(this) }
+        eraseFaults = findViewById(R.id.eraseFaults)
+        eraseFaults.setOnClickListener { if (canSend()) confirmErase() }
 
         fillSims()
         if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED)
@@ -97,6 +110,53 @@ class SettingsActivity : Activity() {
         periodicCount.setOnSeekBarChangeListener(slider)
         sim.setOnCheckedChangeListener { _, _ -> updateSave() }
         updateSave()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        renderFaults()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+    }
+
+    /** The codes the last READ got, how READ or ERASE goes; the buttons only with a saved number and none under way */
+    private fun renderFaults() {
+        val before = if (prefs.contains(Heater.LAST_FAULTS_BEFORE))
+            Faults.split(prefs.getString(Heater.LAST_FAULTS_BEFORE, "").orEmpty()) else null
+        val last = if (prefs.contains(Heater.LAST_FAULTS))
+            Faults.text(Faults.split(prefs.getString(Heater.LAST_FAULTS, "").orEmpty()), before)
+                .let { "READ ${time(prefs.getLong(Heater.LAST_FAULTS_TIME, 0))}:" + if (it == "нет") " $it" else "\n$it" }
+        else "Ещё не читались"
+        faultsInfo.text = listOf(last, prefs.getString(Heater.FAULTS_NOTE, "").orEmpty())
+            .filter { it.isNotEmpty() }.joinToString("\n")
+        val free = Heater.isConfigured(this) && !Heater.isReadingFaults(this)
+        for (b in listOf(readFaults, eraseFaults)) {
+            b.isEnabled = free
+            b.alpha = if (free) 1f else 0.4f
+        }
+    }
+
+    private fun time(ms: Long) = SimpleDateFormat("d MMM HH:mm", Locale("ru")).format(Date(ms))
+
+    private fun canSend(): Boolean {
+        if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) return true
+        requestPermissions(arrayOf(Manifest.permission.SEND_SMS), 2)
+        return false
+    }
+
+    private fun confirmErase() {
+        AlertDialog.Builder(this)
+            .setTitle("Стереть коды ошибок?")
+            .setMessage("Будет отправлено 2 SMS: ERASE сотрёт память ошибок отопителя, " +
+                "через ${Heater.ERASE_READ_DELAY / 1000} с READ проверит, что она пуста. " +
+                "Старые коды пропадут и из диагностики в сервисе.")
+            .setPositiveButton("Стереть") { _, _ -> Heater.eraseFaults(this) }
+            .setNegativeButton("Отмена", null)
+            .show()
     }
 
     private fun updateSave() {

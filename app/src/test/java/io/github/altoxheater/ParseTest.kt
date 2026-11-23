@@ -48,4 +48,18 @@ class ParseTest {
     @Test fun notStatus() {
         assertNull(Heater.parse("Баланс 120 руб."))
     }
+
+    @Test fun faults() {
+        assertEquals("84, 12", Heater.parseFaults("Webasto diagnistics\nFault code: 84, 12"))
+        assertEquals("0B, AB", Heater.parseFaults("Fault code: b,ab"))
+        // FF: an empty cell
+        assertEquals("84", Heater.parseFaults("Fault code: 84, FF, FF"))
+        assertEquals("ошибка производителя авто 5", Faults.name("64"))
+        assertEquals("ошибка производителя авто 63", Faults.name("FE"))
+        assertEquals("перегрев ОЖ без горения (выше 145 °C)", Faults.name("86"))
+        assertEquals(null, Faults.name("1C"))
+        assertEquals("", Heater.parseFaults("Webasto diagnostics\nFault code: none"))
+        assertEquals(null, Heater.parseFaults("HEATER OFF\nHEATER: 7C"))
+        assertEquals(null, Heater.parse("Webasto diagnostics\nFault code: 84, 12"))
+    }
 }

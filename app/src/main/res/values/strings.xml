@@ -14,5 +14,8 @@
     <string name="periodic_count">Опросов за цикл нагрева (температура, бортсеть), кроме статусов после пуска, пламени и в конце. Авто: 0 для 10–20 мин, 1 для 21–35, 2 для 36–49, 3 для 50–120</string>
     <string name="pick_contact">Выбрать из контактов</string>
     <string name="back">Назад</string>
+    <string name="fault_codes">Коды ошибок Webasto</string>
+    <string name="read_faults">Прочитать коды ошибок (1 SMS)</string>
+    <string name="erase_faults">Стереть коды ошибок (2 SMS)</string>
     <string name="save">Сохранить</string>
 </resources>

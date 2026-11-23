@@ -119,8 +119,20 @@ object Heater {
     const val ERROR = "error" // still on after the end and our STOP
 
     const val MESSAGE = "message" // the last error, shown until the next command
-    const val UNKNOWN_REPLY = "unknownReply" // an SMS from Altox that is not a status reply
-    const val UNKNOWN_AT = "unknownAt" // when it came: it explains a timeout of a STATUS sent before it
+
+    // Fault codes, see Faults
+    const val READ_SENT = "readSent" // READ is waiting for a reply; 0: not
+    const val READ_AT = "readAt" // READ planned after ERASE; 0: none
+    const val READ_FOR = "readFor" // whose READ it is: "" an error's, READ_MANUAL or READ_ERASE (the settings' buttons)
+    const val READ_MANUAL = "manual"
+    const val READ_ERASE = "erase" // checks that ERASE emptied the memory
+    const val FAULTS = "faults" // the codes READ got for the error in MESSAGE: "84, 12", "" none; missing: not read
+    const val FAULTS_BEFORE = "faultsBefore" // LAST_FAULTS before that READ, to mark the new ones; missing: none
+    const val LAST_FAULTS = "lastFaults" // the codes the last READ got, kept; missing: never read
+    const val LAST_FAULTS_TIME = "lastFaultsTime"
+    const val LAST_FAULTS_BEFORE = "lastFaultsBefore" // LAST_FAULTS before it, to mark the new ones; missing: none
+    const val FAULTS_NOTE = "faultsNote" // how the settings' READ or ERASE goes, under their buttons
+    const val ERASE_READ_DELAY = 10_000L // from ERASE to READ: the module takes the SMS in order, but not at once
 
     // Status
     const val STATUS_SENT = "statusSent" // 0 if no STATUS is waiting for a reply
@@ -134,6 +146,8 @@ object Heater {
 
     const val KIND_COMMAND = "command"
     const val KIND_STATUS = "status"
+    const val KIND_READ = "read"
+    const val KIND_ERASE = "erase"
 
     /** State is written with commit(): after a receiver returns, the process may be killed at once */
     fun prefs(ctx: Context): SharedPreferences =
@@ -231,17 +245,20 @@ object Heater {
     fun isPending(state: String?) = state == STARTING || state == STOPPING
 
     fun start(ctx: Context) {
+        clearFaults(ctx)
         prefs(ctx).edit().putBoolean(IGNITING, true).putBoolean(FLAME_RECHECKED, false).remove(START_COOLANT).commit()
         command(ctx, "START:${minutes(ctx)}", STARTING)
     }
 
     /** [forced]: STOP_END or STOP_NO_FLAME, one STATUS decides; [message] stays on screen meanwhile */
     fun stop(ctx: Context, forced: String = "", message: String? = null) {
+        if (forced.isEmpty()) clearFaults(ctx)
         prefs(ctx).edit().putString(FORCED_STOP, forced).commit()
         command(ctx, "STOP", STOPPING, message)
     }
 
     fun requestStatus(ctx: Context) {
+        clearFaults(ctx)
         prefs(ctx).edit().putLong(STATUS_SENT, now()).putBoolean(STATUS_AUTO, false).remove(MESSAGE).commit()
         if (!send(ctx, "STATUS", KIND_STATUS)) statusFailed(ctx, "Не удалось отправить SMS")
         else scheduleWake(ctx)
@@ -262,6 +279,79 @@ object Heater {
         if (!send(ctx, cmd, KIND_COMMAND)) commandFailed(ctx, "Не удалось отправить SMS")
         else scheduleWake(ctx)
     }
+
+    /**
+     * After the heater did something it should not (no start, no flame, off early, not off):
+     * READ, its "Fault code:" reply goes under the message. Once per error; no reply is no error
+     */
+    private fun readFaults(ctx: Context) {
+        val p = prefs(ctx)
+        if (p.getLong(READ_SENT, 0) > 0 || p.contains(FAULTS)) return
+        p.edit().putLong(READ_SENT, now()).putString(READ_FOR, "").putLong(READ_AT, 0).commit()
+        if (!send(ctx, "READ", KIND_READ)) p.edit().putLong(READ_SENT, 0).commit()
+        else scheduleWake(ctx)
+    }
+
+    private fun clearFaults(ctx: Context) {
+        val p = prefs(ctx)
+        val e = p.edit().remove(FAULTS).remove(FAULTS_BEFORE)
+        if (p.getString(READ_FOR, "").isNullOrEmpty()) e.putLong(READ_SENT, 0)
+        e.commit()
+    }
+
+    /** The fault codes under the message, "" if READ was not sent for it */
+    fun faultsText(p: SharedPreferences): String = when {
+        p.contains(FAULTS) -> "Коды ошибок Webasto:" + Faults.text(
+            Faults.split(p.getString(FAULTS, "").orEmpty()),
+            if (p.contains(FAULTS_BEFORE)) Faults.split(p.getString(FAULTS_BEFORE, "").orEmpty()) else null,
+        ).let { if (it == "нет") " $it" else "\n$it" }
+        p.getLong(READ_SENT, 0) > 0 && p.getString(READ_FOR, "").isNullOrEmpty() -> "Запрошены коды ошибок Webasto"
+        else -> ""
+    }
+
+    /** A READ or ERASE is under way: ERASE sent and its READ planned, or a READ waiting for the reply */
+    fun isReadingFaults(ctx: Context): Boolean {
+        val p = prefs(ctx)
+        return p.getLong(READ_AT, 0) > 0 || p.getLong(READ_SENT, 0) > 0
+    }
+
+    /** The settings' button: READ, the codes go under it */
+    fun readFaultsNow(ctx: Context) {
+        val p = prefs(ctx)
+        if (isReadingFaults(ctx)) return
+        p.edit().putLong(READ_SENT, now()).putString(READ_FOR, READ_MANUAL)
+            .putString(FAULTS_NOTE, "Отправлена команда READ").commit()
+        if (!send(ctx, "READ", KIND_READ)) eraseFailed(ctx, "Не удалось отправить SMS")
+        else scheduleWake(ctx)
+    }
+
+    /** The settings' button: ERASE, then READ ERASE_READ_DELAY later to see the memory empty */
+    fun eraseFaults(ctx: Context) {
+        val p = prefs(ctx)
+        if (isReadingFaults(ctx)) return
+        p.edit().putLong(READ_AT, now() + ERASE_READ_DELAY).putString(FAULTS_NOTE, "Отправлена команда ERASE").commit()
+        if (!send(ctx, "ERASE", KIND_ERASE)) eraseFailed(ctx, "Не удалось отправить SMS")
+        else scheduleWake(ctx)
+    }
+
+    /** The settings' ERASE or READ did not leave, [message] says why */
+    fun eraseFailed(ctx: Context, message: String) {
+        val p = prefs(ctx)
+        p.edit().putLong(READ_AT, 0).putString(FAULTS_NOTE, message).commit()
+        if (!p.getString(READ_FOR, "").isNullOrEmpty()) p.edit().putLong(READ_SENT, 0).putString(READ_FOR, "").commit()
+        scheduleWake(ctx)
+    }
+
+    /** READ did not leave */
+    fun readFailed(ctx: Context, message: String) {
+        val p = prefs(ctx)
+        if (!p.getString(READ_FOR, "").isNullOrEmpty()) return eraseFailed(ctx, message)
+        p.edit().putLong(READ_SENT, 0).commit()
+        scheduleWake(ctx)
+    }
+
+    /** The codes of a READ reply, "84, 12" or "" for none; null if [text] is not one */
+    fun parseFaults(text: String): String? = Faults.parse(text)?.let(Faults::join)
 
     /** The command SMS has left: plan the first STATUS */
     fun commandSent(ctx: Context, at: Long = now()) {
@@ -324,15 +414,8 @@ object Heater {
         }
         p.edit().putBoolean(IGNITING, false).putLong(ENDS_AT, 0).commit()
         play(ctx, ERROR_SOUND)
+        readFaults(ctx)
         stop(ctx, STOP_NO_FLAME, "$why через $after мин после пуска, отправлен STOP")
-    }
-
-    /** What a STATUS without a reply gets: "Непонятный ответ" if something unparsable came after it was sent */
-    private fun noReply(ctx: Context, message: String): String {
-        val p = prefs(ctx)
-        val unknown = p.getString(UNKNOWN_REPLY, "").orEmpty()
-        val after = p.getLong(UNKNOWN_AT, 0) >= p.getLong(STATUS_SENT, Long.MAX_VALUE)
-        return if (unknown.isNotEmpty() && after) "Непонятный ответ Altox:\n$unknown" else message
     }
 
     private fun planPoll(ctx: Context, at: Long) {
@@ -353,6 +436,8 @@ object Heater {
             endCheckAt(ctx).takeIf { state == ON && statusSent == 0L && it > 0 },
             p.getLong(FLAME_CHECK_AT, 0).takeIf { state == ON && statusSent == 0L && it > 0 },
             p.getLong(AUTO_AT, 0).takeIf { state == ON && statusSent == 0L && it > 0 },
+            p.getLong(READ_AT, 0).takeIf { it > 0 },
+            p.getLong(READ_SENT, 0).takeIf { it > 0 }?.let { it + replyTimeout(ctx) + 1 },
         ).minOrNull() ?: 0
     }
 
@@ -417,20 +502,28 @@ object Heater {
     fun catchUp(ctx: Context) {
         val p = prefs(ctx)
         val sent = p.getLong(STATUS_SENT, 0)
-        if (sent == 0L || ctx.checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return
+        val read = p.getLong(READ_SENT, 0)
+        val from = listOf(sent, read).filter { it > 0 }.minOrNull() ?: return
+        val to = maxOf(sent, read) + replyTimeout(ctx)
+        if (ctx.checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return
         val date = Telephony.Sms.DATE
         val rows = try {
             ctx.contentResolver.query(
                 Telephony.Sms.Inbox.CONTENT_URI, arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, date),
-                "$date >= ? AND $date <= ?", arrayOf("$sent", "${sent + replyTimeout(ctx)}"), "$date ASC",
+                "$date >= ? AND $date <= ?", arrayOf("$from", "$to"), "$date ASC",
             )
         } catch (e: Exception) {
             null
         } ?: return
         rows.use { c ->
-            // An unknown reply leaves the STATUS waiting: the real one may be next
-            while (p.getLong(STATUS_SENT, 0) == sent && c.moveToNext()) {
-                if (isFromAltox(ctx, c.getString(0))) onReply(ctx, c.getString(1).orEmpty(), c.getLong(2))
+            while (c.moveToNext()) {
+                if (!isFromAltox(ctx, c.getString(0))) continue
+                val text = c.getString(1).orEmpty()
+                val at = c.getLong(2)
+                val waiting = if (parseFaults(text) != null) p.getLong(READ_SENT, 0).let { it > 0 && at >= it }
+                    // Anything else from Altox leaves the STATUS waiting: the real reply may be next
+                    else p.getLong(STATUS_SENT, 0).let { it == sent && it > 0 && at <= it + replyTimeout(ctx) }
+                if (waiting) onReply(ctx, text, at)
             }
         }
     }
@@ -439,6 +532,18 @@ object Heater {
     fun tick(ctx: Context) {
         val p = prefs(ctx)
         val now = now()
+        val readSent = p.getLong(READ_SENT, 0)
+        if (readSent > 0 && now - readSent > replyTimeout(ctx)) {
+            if (!p.getString(READ_FOR, "").isNullOrEmpty()) p.edit().putString(FAULTS_NOTE, "Нет ответа на READ").commit()
+            p.edit().putLong(READ_SENT, 0).putString(READ_FOR, "").commit()
+            scheduleWake(ctx)
+        }
+        if (p.getLong(READ_AT, 0) in 1..now) {
+            p.edit().putLong(READ_AT, 0).putLong(READ_SENT, now).putString(READ_FOR, READ_ERASE)
+                .putString(FAULTS_NOTE, "Отправлена команда ERASE, проверяем командой READ").commit()
+            if (!send(ctx, "READ", KIND_READ)) eraseFailed(ctx, "Не удалось отправить SMS")
+            else scheduleWake(ctx)
+        }
         val state = p.getString(STATE, OFF)
         if (isPending(state)) {
             val pendingSince = p.getLong(PENDING_SINCE, now)
@@ -451,12 +556,12 @@ object Heater {
                     if (!send(ctx, "STATUS", KIND_STATUS)) commandFailed(ctx, "Не удалось отправить SMS")
                     else scheduleWake(ctx)
                 }
-                statusSent > 0 && now - statusSent > replyTimeout(ctx) -> commandFailed(ctx, noReply(ctx, "Нет ответа от Altox"))
+                statusSent > 0 && now - statusSent > replyTimeout(ctx) -> commandFailed(ctx, "Нет ответа от Altox")
             }
             return
         }
         val statusSent = p.getLong(STATUS_SENT, 0)
-        if (statusSent > 0 && now - statusSent > replyTimeout(ctx)) statusFailed(ctx, noReply(ctx, "Нет ответа на запрос статуса"))
+        if (statusSent > 0 && now - statusSent > replyTimeout(ctx)) statusFailed(ctx, "Нет ответа на запрос статуса")
         val endCheckAt = endCheckAt(ctx)
         if (state == ON && p.getLong(STATUS_SENT, 0) == 0L && endCheckAt in 1..now) {
             if (!p.getBoolean(END_CHECKED, false)) {
@@ -627,14 +732,32 @@ object Heater {
     /** [at]: when the SMS came, earlier than now if catchUp() found it */
     fun onReply(ctx: Context, text: String, at: Long = now()) {
         val p = prefs(ctx)
-        val s = parse(text)
-        if (s == null) {
-            // The real reply may still come; if not, the timeout tells this instead of "Нет ответа"
-            val unknown = text.trim().take(160)
-            p.edit().putString(MESSAGE, "Непонятный ответ Altox:\n$unknown")
-                .putString(UNKNOWN_REPLY, unknown).putLong(UNKNOWN_AT, at).commit()
+        parseFaults(text)?.let { codes ->
+            // Only the READ we sent; one the module sends by itself may be old
+            if (p.getLong(READ_SENT, 0) == 0L) return
+            val readFor = p.getString(READ_FOR, "")
+            val e = p.edit().putLong(READ_SENT, 0).putString(READ_FOR, "")
+                .putString(LAST_FAULTS, codes).putLong(LAST_FAULTS_TIME, at)
+            // After ERASE there is nothing to compare with
+            if (p.contains(LAST_FAULTS) && readFor != READ_ERASE) e.putString(LAST_FAULTS_BEFORE, p.getString(LAST_FAULTS, ""))
+            else e.remove(LAST_FAULTS_BEFORE)
+            when (readFor) {
+                READ_ERASE -> e.putString(FAULTS_NOTE, if (codes.isEmpty()) "Коды ошибок стёрты" else "Коды ошибок не стёрлись")
+                READ_MANUAL -> e.remove(FAULTS_NOTE)
+                else -> {
+                    e.putString(FAULTS, codes)
+                    if (p.contains(LAST_FAULTS)) e.putString(FAULTS_BEFORE, p.getString(LAST_FAULTS, "")) else e.remove(FAULTS_BEFORE)
+                    e.remove(FAULTS_NOTE)
+                }
+            }
+            e.commit()
+            scheduleWake(ctx)
             return
         }
+        val s = parse(text)
+        // Not a status reply: the balance, or an SMS the module could not read and forwarded to us.
+        // Ignored; the reply we wait for may still come
+        if (s == null) return
         val now = at
         val state = p.getString(STATE, OFF)
         // Flickers from START to the first FLAME: YES, or to the reply to the flame STATUS
@@ -687,6 +810,8 @@ object Heater {
                 val next = now + POLL_EVERY
                 if (next > p.getLong(DEADLINE, 0)) {
                     if (s.on != null) p.edit().putString(PREV_STATE, if (s.on) ON else OFF).commit()
+                    // The heater answered, but not as it should: why, says READ
+                    if (s.on != null) readFaults(ctx)
                     commandFailed(ctx, when {
                         state == STARTING -> "Отопитель не запустился"
                         p.getString(FORCED_STOP, "") == STOP_END -> "Отопитель не выключился в конце цикла и после команды STOP"
@@ -706,6 +831,7 @@ object Heater {
             s.on == true && state == ON && p.getBoolean(END_CHECKED, false) -> {
                 // Still on after the end: the module should have stopped it, so we do
                 e.putLong(ENDS_AT, 0).commit()
+                readFaults(ctx)
                 stop(ctx, STOP_END)
                 return
             }
@@ -726,6 +852,7 @@ object Heater {
             }
         }
         e.commit()
+        if (sound == ERROR_SOUND) readFaults(ctx)
         sound?.let { play(ctx, it) }
         planPeriodic(ctx)
         scheduleWake(ctx)

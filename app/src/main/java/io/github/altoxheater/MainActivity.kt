@@ -100,6 +100,9 @@ class MainActivity : Activity() {
         // Looks active all the time (it shows the time left), but takes touches only when idle
         minutes.setOnTouchListener { _, _ -> !sliderEditable }
 
+        // Recents would show a screenshot of the old state while the app opens; a plain screen instead
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
+
         val missing = missingPermissions()
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
@@ -110,21 +113,32 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList())
             .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
 
-    override fun onResume() {
-        super.onResume()
+    /** Brings the state up to date before the first frame, so the screen never shows the old one first */
+    override fun onStart() {
+        super.onStart()
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         // Before the first tick(): it would time out the STATUS whose reply is already in the inbox
         Heater.catchUp(this)
+        Heater.tick(this)
         Heater.scheduleWake(this)
         render()
+        renderFrame()
+    }
+
+    override fun onResume() {
+        super.onResume()
         handler.post(frame)
         checkBackground()
     }
 
     override fun onPause() {
         super.onPause()
-        prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         handler.removeCallbacks(frame)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
     }
 
     private fun ensureSmsPermissions(): Boolean {
@@ -240,7 +254,8 @@ class MainActivity : Activity() {
             prefs.contains(Heater.PREV_STATE) -> "Нагрев выключен"
             else -> ""
         }
-        message.text = prefs.getString(Heater.MESSAGE, "")
+        message.text = listOf(prefs.getString(Heater.MESSAGE, "").orEmpty(), Heater.faultsText(prefs))
+            .filter { it.isNotEmpty() }.joinToString("\n")
 
         sliderEditable = configured && state == Heater.OFF && !statusBusy
         minutes.isEnabled = configured

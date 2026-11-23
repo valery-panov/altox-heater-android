@@ -95,6 +95,8 @@ class HeaterService : Service() {
             state == Heater.STOPPING -> "Остановка отопителя"
             error -> "Отопитель не выключается"
             state == Heater.ON -> "Нагрев запущен"
+            p.getLong(Heater.STATUS_SENT, 0) == 0L && Heater.isReadingFaults(this) ->
+                "Чтение кодов ошибок"
             else -> "Запрос статуса"
         }
         val text = p.getString(Heater.MESSAGE, "").orEmpty().ifEmpty {
