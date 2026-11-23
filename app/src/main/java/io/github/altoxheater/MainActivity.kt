@@ -41,7 +41,9 @@ class MainActivity : Activity() {
     private lateinit var statusTime: TextView
     private lateinit var forecastBlock: View
     private lateinit var forecast: TextView
-    private lateinit var forecastNote: TextView
+    /** How the forecast was made: in a dialog behind the (i), the screen has no room for it */
+    var forecastText = ""
+        private set
     private lateinit var historyCard: View
     private lateinit var chart: HistoryView
     private lateinit var historyList: LinearLayout
@@ -79,7 +81,13 @@ class MainActivity : Activity() {
         statusTime = findViewById(R.id.statusTime)
         forecastBlock = findViewById(R.id.forecastBlock)
         forecast = findViewById(R.id.forecast)
-        forecastNote = findViewById(R.id.forecastNote)
+        findViewById<View>(R.id.forecastRow).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Прогноз ОЖ")
+                .setMessage(forecastText)
+                .setPositiveButton("Понятно", null)
+                .show()
+        }
         historyCard = findViewById(R.id.historyCard)
         chart = findViewById(R.id.chart)
         historyList = findViewById(R.id.historyList)
@@ -320,8 +328,9 @@ class MainActivity : Activity() {
                 else -> ""
             }
             val speed = if (f.samples == 0) "средняя" else "по прошлым остываниям (${f.samples})"
-            forecastNote.text = "От замера ${fmt(f.from.coolant!!)}\u00A0°C ${dayTime(f.from.t)}$engine к воздуху ≈ ${fmt(f.ambient)}\u00A0°C ($air). " +
-                "Скорость остывания $speed."
+            forecastText = "От замера ${fmt(f.from.coolant!!)}\u00A0°C ${dayTime(f.from.t)}$engine к воздуху ≈ ${fmt(f.ambient)}\u00A0°C ($air). " +
+                "Скорость остывания $speed.\n\nПоездку после последнего статуса прогноз не знает: " +
+                "её покажет следующий статус. Выключить прогноз можно в настройках."
         }
 
         val readings = History.readings(prefs)
@@ -366,7 +375,7 @@ class MainActivity : Activity() {
 
     private fun row(time: String, text: CharSequence, color: Int): View {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val pad = (3 * resources.displayMetrics.density).toInt()
+        val pad = (2 * resources.displayMetrics.density).toInt()
         fun cell(text: CharSequence, weight: Float, color: Int) = TextView(this).apply {
             this.text = text
             textSize = 14f

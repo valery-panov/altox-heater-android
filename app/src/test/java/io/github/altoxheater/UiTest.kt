@@ -178,7 +178,7 @@ class UiTest {
         assertEquals(android.view.View.VISIBLE, a.findViewById<android.view.View>(R.id.forecastBlock).visibility)
         val avg = History.cool(72.0, 9.0, time - run.end, History.TAU_DEFAULT)
         assertEquals(avg, forecast(a), 1.0)
-        assertTrue(text(a, R.id.forecastNote).endsWith("Скорость остывания средняя."))
+        assertTrue(forecastInfo(a).contains("Скорость остывания средняя."))
 
         status(a).performClick()
         advance(4_000)
@@ -191,7 +191,7 @@ class UiTest {
 
         advance(90 * 60_000)
         assertEquals(History.cool(40.0, 9.0, 90 * 60_000L, tau), forecast(a), 1.0)
-        assertTrue(text(a, R.id.forecastNote).contains("по прошлым остываниям (1)"))
+        assertTrue(forecastInfo(a).contains("по прошлым остываниям (1)"))
         shot(a, "40-history-forecast")
 
         // Driven since: 85 °C with the alternator's voltage. Listed, the forecast starts from it, no cooling learned
@@ -202,7 +202,7 @@ class UiTest {
         assertEquals(1, History.taus(Heater.prefs(app)).size)
         val trip = a.findViewById<android.widget.LinearLayout>(R.id.historyList).getChildAt(0) as android.widget.LinearLayout
         assertEquals("мотор работал · ОЖ 85\u00A0°C · 14.2\u00A0В", (trip.getChildAt(1) as android.widget.TextView).text.toString())
-        assertTrue(text(a, R.id.forecastNote).contains("при работающем моторе"))
+        assertTrue(forecastInfo(a).contains("при работающем моторе"))
         assertEquals(History.cool(85.0, 9.0, 30 * 60_000L, tau), forecast(a), 1.0)
         shot(a, "41-history-trip")
 
@@ -210,6 +210,32 @@ class UiTest {
         Heater.prefs(app).edit().putBoolean(History.PREDICT, false).commit()
         advance(60_000)
         assertEquals(android.view.View.GONE, a.findViewById<android.view.View>(R.id.forecastBlock).visibility)
+    }
+
+    /**
+     * A phone with three soft buttons: about 720dp left for the app. The fullest idle screen, the
+     * forecast and three history rows, fits without scrolling
+     */
+    @Config(qualifiers = "w392dp-h720dp-xhdpi")
+    @Test fun fitsSmallScreen() {
+        configure(periodic = 0)
+        val h = 3_600_000L
+        val start = time - 5 * h
+        for ((i, t) in listOf(start, start + 2 * h, start + 4 * h).withIndex()) {
+            History.startRun(app, t, 20)
+            History.addReading(app, History.Reading(t + 1_000, 5.0 + i, 3.0, 12.6, true, false))
+            History.addReading(app, History.Reading(t + 21 * 60_000, 70.0, 4.0, 12.4, false, false))
+            History.endRun(app, t + 21 * 60_000, History.RESULT_OK)
+        }
+        Heater.prefs(app).edit().putLong(Heater.STATUS_TIME, start + 4 * h + 21 * 60_000).putString(Heater.COOLANT, "70")
+            .putString(Heater.CABIN, "4").putString(Heater.VOLTAGE, "12.4").putString(Heater.PREV_STATE, Heater.OFF).commit()
+        val a = launch()
+        idle()
+        assertEquals(android.view.View.VISIBLE, a.findViewById<android.view.View>(R.id.forecastBlock).visibility)
+        assertEquals(3, a.findViewById<android.widget.LinearLayout>(R.id.historyList).childCount)
+        val scroll = a.findViewById<android.widget.ScrollView>(R.id.scroll)
+        shot(a, "42-small-screen")
+        assertTrue("content ${scroll.getChildAt(0).height} > ${scroll.height}", scroll.getChildAt(0).height <= scroll.height)
     }
 
     @Test fun statusRequest() {
@@ -1172,6 +1198,16 @@ class UiTest {
 
     /** "≈ 23 °C" -> 23; redrawn once a minute, so within a degree of the exact value */
     private fun forecast(a: Activity) = text(a, R.id.forecast).filter { it.isDigit() || it == '-' }.toDouble()
+
+    /** The (i) dialog's text, the dialog closed again */
+    private fun forecastInfo(a: Activity): String {
+        a.findViewById<android.view.View>(R.id.forecastRow).performClick()
+        idle()
+        val d = ShadowAlertDialog.getLatestAlertDialog()
+        val text = shadowOf(d).message.toString()
+        d.dismiss()
+        return text
+    }
 
     private fun power(a: Activity) = a.findViewById<RoundButton>(R.id.power)
     private fun status(a: Activity) = a.findViewById<RoundButton>(R.id.status)
