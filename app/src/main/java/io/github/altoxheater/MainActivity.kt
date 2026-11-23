@@ -93,7 +93,7 @@ class MainActivity : Activity() {
         power.hint = "удерживайте\n1 секунду"
         status.hint = "удерживайте"
 
-        findViewById<TextView>(R.id.settings).setOnClickListener {
+        findViewById<View>(R.id.settings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
         power.setOnClickListener {
@@ -312,15 +312,14 @@ class MainActivity : Activity() {
         if (f != null) {
             forecast.text = "≈ ${f.coolant.roundToInt()} °C"
             val air = if (History.fan(prefs)) "салон без нагрева" else "салон"
-            val speed = if (f.samples == 0) "Скорость остывания пока средняя, уточнится по статусам между нагревами"
-                else "Скорость остывания по прошлым остываниям (${f.samples})"
             val engine = when {
-                f.from.engine -> " Мотор в момент замера работал (${fmt(f.from.voltage!!)} В): считаем, что его заглушили сразу после."
-                f.warmed -> " Перед замером мотор работал."
+                f.from.engine -> " при работающем моторе"
+                f.warmed -> " после работы мотора"
                 else -> ""
             }
-            forecastNote.text = "Замер ${fmt(f.from.coolant!!)} °C ${dayTime(f.from.t)}, воздух ≈ ${fmt(f.ambient)} °C ($air).$engine " +
-                "$speed. Поездку после замера покажет только следующий статус."
+            val speed = if (f.samples == 0) "средняя" else "по прошлым остываниям (${f.samples})"
+            forecastNote.text = "От замера ${fmt(f.from.coolant!!)}\u00A0°C ${dayTime(f.from.t)}$engine к воздуху ≈ ${fmt(f.ambient)}\u00A0°C ($air). " +
+                "Скорость остывания $speed."
         }
 
         val readings = History.readings(prefs)
@@ -329,7 +328,6 @@ class MainActivity : Activity() {
         historyCard.visibility = if (readings.isEmpty() && runs.isEmpty()) View.GONE else View.VISIBLE
         chart.readings = readings
         chart.runs = runs
-        chart.trips = trips
         chart.forecast = f
         chart.now = now
         chart.invalidate()
@@ -339,10 +337,10 @@ class MainActivity : Activity() {
         for ((_, v) in rows.sortedBy { it.first }.takeLast(HISTORY_ROWS).reversed()) historyList.addView(v)
     }
 
-    /** "сегодня 08:40   мотор работал · ОЖ до 88 °C, 14.2 В" */
+    /** "сегодня 08:40   мотор работал · ОЖ 88 °C · 14.2 В" */
     private fun tripRow(t: History.Trip): View {
-        val coolant = t.maxCoolant?.let { " · ОЖ ${if (t.voltage != null) "до " else ""}${fmt(it)}\u00A0°C" } ?: ""
-        val text = if (t.voltage != null) "мотор работал$coolant, ${fmt(t.voltage)}\u00A0В"
+        val coolant = t.maxCoolant?.let { " · ОЖ ${fmt(it)}\u00A0°C" } ?: ""
+        val text = if (t.voltage != null) "мотор работал$coolant · ${fmt(t.voltage)}\u00A0В"
             else "до замера работал мотор$coolant"
         return row(dayTime(t.start), text, R.color.text_secondary)
     }
@@ -392,7 +390,6 @@ class MainActivity : Activity() {
         item("●", R.color.btn_on, "ОЖ")
         item("●", R.color.btn_status, "салон")
         item("■", R.color.chart_run, "нагрев")
-        item("■", R.color.chart_engine, "мотор")
         return b.trimEnd()
     }
 

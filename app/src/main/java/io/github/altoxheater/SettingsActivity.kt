@@ -183,13 +183,12 @@ class SettingsActivity : Activity() {
             predict.isChecked != History.predict(prefs) ||
             fan.isChecked != History.fan(prefs)
         fan.isEnabled = predict.isChecked
-        coolingNote.text = when {
-            !predict.isChecked -> "Прогноза нет: на главном экране только последний замер."
-            fan.isChecked -> "ОЖ остывает к температуре воздуха. Салон греется вместе с мотором, " +
-                "поэтому воздух берётся по салону до нагрева или через час после него."
-            else -> "ОЖ остывает к температуре воздуха, её даёт салон: он почти не греется от мотора. " +
-                "Скорость остывания уточняется по статусам между нагревами."
-        }
+        val air = if (fan.isChecked) "ОЖ остывает к температуре воздуха. Салон греется вместе с мотором, " +
+            "поэтому воздух берётся по салону до нагрева или через час после него."
+            else "ОЖ остывает к температуре воздуха, её даёт салон: он почти не греется от мотора."
+        coolingNote.text = if (!predict.isChecked) "Прогноза нет: на главном экране только последний замер."
+            else "$air Скорость остывания уточняется по статусам между нагревами. Работу мотора видно по статусу " +
+                "(от ${History.ENGINE_VOLTAGE}\u00A0В или ОЖ теплее, чем после остывания); поездку после последнего статуса прогноз не знает."
         flameDelayLabel.text = "${delay()} мин"
         finishSound.text = soundTitle(finishUri)
         errorSound.text = soundTitle(errorUri)

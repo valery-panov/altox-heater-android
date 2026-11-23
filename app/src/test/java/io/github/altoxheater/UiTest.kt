@@ -178,7 +178,7 @@ class UiTest {
         assertEquals(android.view.View.VISIBLE, a.findViewById<android.view.View>(R.id.forecastBlock).visibility)
         val avg = History.cool(72.0, 9.0, time - run.end, History.TAU_DEFAULT)
         assertEquals(avg, forecast(a), 1.0)
-        assertTrue(text(a, R.id.forecastNote).contains("пока средняя"))
+        assertTrue(text(a, R.id.forecastNote).endsWith("Скорость остывания средняя."))
 
         status(a).performClick()
         advance(4_000)
@@ -201,8 +201,8 @@ class UiTest {
         advance(30 * 60_000)
         assertEquals(1, History.taus(Heater.prefs(app)).size)
         val trip = a.findViewById<android.widget.LinearLayout>(R.id.historyList).getChildAt(0) as android.widget.LinearLayout
-        assertEquals("мотор работал · ОЖ до 85\u00A0°C, 14.2\u00A0В", (trip.getChildAt(1) as android.widget.TextView).text.toString())
-        assertTrue(text(a, R.id.forecastNote).contains("Мотор в момент замера работал (14.2 В)"))
+        assertEquals("мотор работал · ОЖ 85\u00A0°C · 14.2\u00A0В", (trip.getChildAt(1) as android.widget.TextView).text.toString())
+        assertTrue(text(a, R.id.forecastNote).contains("при работающем моторе"))
         assertEquals(History.cool(85.0, 9.0, 30 * 60_000L, tau), forecast(a), 1.0)
         shot(a, "41-history-trip")
 

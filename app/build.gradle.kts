@@ -6,7 +6,7 @@ plugins {
 }
 
 // The one place to bump for a release; build.sh reads it too
-val appVersion = "1.25"
+val appVersion = "1.26"
 
 android {
     namespace = "io.github.altoxheater"

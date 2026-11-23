@@ -9,7 +9,6 @@
     <!-- The history chart's bands: opaque, so the legend shows the same colour -->
     <color name="chart_run">#F9DDBD</color>
     <color name="chart_run_failed">#F4D0D0</color>
-    <color name="chart_engine">#D5DEE8</color>
     <!-- Round buttons -->
     <color name="btn_off">#2FA37A</color>
     <color name="btn_pending">#E8932F</color>

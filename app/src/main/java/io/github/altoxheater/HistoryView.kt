@@ -21,7 +21,6 @@ import kotlin.math.roundToInt
 class HistoryView(ctx: Context, attrs: AttributeSet? = null) : View(ctx, attrs) {
     var readings: List<History.Reading> = emptyList()
     var runs: List<History.Run> = emptyList()
-    var trips: List<History.Trip> = emptyList()
     var forecast: History.Forecast? = null
     var now = 0L
 
@@ -33,7 +32,6 @@ class HistoryView(ctx: Context, attrs: AttributeSet? = null) : View(ctx, attrs) 
     private val cabinColor = ctx.getColor(R.color.btn_status)
     private val band = Paint().apply { color = ctx.getColor(R.color.chart_run) }
     private val failedBand = Paint().apply { color = ctx.getColor(R.color.chart_run_failed) }
-    private val engineBand = Paint().apply { color = ctx.getColor(R.color.chart_engine) }
     private val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ctx.getColor(R.color.btn_disabled); strokeWidth = dp(1f) }
     private val axis = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = ctx.getColor(R.color.text_secondary)
@@ -94,12 +92,6 @@ class HistoryView(ctx: Context, attrs: AttributeSet? = null) : View(ctx, attrs) 
             if (end < from) continue
             c.drawRect(x(maxOf(r.start, from)), top, maxOf(x(end), x(maxOf(r.start, from)) + dp(2f)), bottom,
                 if (r.end > 0 && !r.ok) failedBand else band)
-        }
-        // Trips: a reading shows only that the engine ran by then, so at least a few dp around it
-        for (t in trips) {
-            if (t.end < from) continue
-            val l = x(maxOf(t.start, from))
-            c.drawRect(l - dp(3f), top, maxOf(x(t.end), l) + dp(3f), bottom, engineBand)
         }
         // Grid: 3 lines, °C at the left
         val step = ((hi - lo) / 2)
