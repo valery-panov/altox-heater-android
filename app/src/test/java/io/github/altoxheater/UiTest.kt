@@ -148,6 +148,70 @@ class UiTest {
     }
 
 
+    /** A run to its end, a STATUS an hour later: the history lists it, the forecast learns the cooling */
+    @Test fun historyAndForecast() {
+        configure(periodic = 0)
+        val a = launch()
+        assertEquals(android.view.View.GONE, a.findViewById<android.view.View>(R.id.historyCard).visibility)
+        power(a).performClick()
+        idle()
+        Heater.commandSent(app)
+        val start = time
+        advance(1_300)
+        Heater.onReply(app, reply(on = true, flame = false, coolant = 8))
+        advance(start + 240_000 - time)
+        Heater.onReply(app, reply(on = true, flame = true, coolant = 41))
+        advance(start + 30 * 60_000 + Heater.END_DELAY - time)
+        assertEquals("STATUS", lastSms())
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 72))
+        idle()
+        val run = History.runs(Heater.prefs(app)).single()
+        assertEquals(History.RESULT_OK, run.result)
+        assertEquals(android.view.View.VISIBLE, a.findViewById<android.view.View>(R.id.historyCard).visibility)
+        val row = a.findViewById<android.widget.LinearLayout>(R.id.historyList).getChildAt(0) as android.widget.LinearLayout
+        assertEquals("30\u00A0мин · 8 → 72\u00A0°C", (row.getChildAt(1) as android.widget.TextView).text.toString())
+        // Fresh reading: no forecast
+        assertEquals(android.view.View.GONE, a.findViewById<android.view.View>(R.id.forecastBlock).visibility)
+
+        // An hour later, before any cooling was seen: the average speed
+        advance(60 * 60_000)
+        assertEquals(android.view.View.VISIBLE, a.findViewById<android.view.View>(R.id.forecastBlock).visibility)
+        val avg = History.cool(72.0, 9.0, time - run.end, History.TAU_DEFAULT)
+        assertEquals(avg, forecast(a), 1.0)
+        assertTrue(text(a, R.id.forecastNote).contains("пока средняя"))
+
+        status(a).performClick()
+        advance(4_000)
+        Heater.onReply(app, reply(on = false, flame = false, coolant = 40))
+        idle()
+        assertEquals(1, History.taus(Heater.prefs(app)).size)
+        val tau = History.tau(Heater.prefs(app))
+        val minutes = (time - run.end) / 60_000.0
+        assertEquals(minutes / Math.log(63.0 / 31.0), tau, 0.5)
+
+        advance(90 * 60_000)
+        assertEquals(History.cool(40.0, 9.0, 90 * 60_000L, tau), forecast(a), 1.0)
+        assertTrue(text(a, R.id.forecastNote).contains("по прошлым остываниям (1)"))
+        shot(a, "40-history-forecast")
+
+        // Driven since: 85 °C with the alternator's voltage. Listed, the forecast starts from it, no cooling learned
+        status(a).performClick()
+        advance(4_000)
+        Heater.onReply(app, "HEATER OFF\nVOLTAGE: 14.2V\nHEATER: 85C\nSENSOR: 9C\nFLAME: NO")
+        advance(30 * 60_000)
+        assertEquals(1, History.taus(Heater.prefs(app)).size)
+        val trip = a.findViewById<android.widget.LinearLayout>(R.id.historyList).getChildAt(0) as android.widget.LinearLayout
+        assertEquals("мотор работал · ОЖ до 85\u00A0°C, 14.2\u00A0В", (trip.getChildAt(1) as android.widget.TextView).text.toString())
+        assertTrue(text(a, R.id.forecastNote).contains("Мотор в момент замера работал (14.2 В)"))
+        assertEquals(History.cool(85.0, 9.0, 30 * 60_000L, tau), forecast(a), 1.0)
+        shot(a, "41-history-trip")
+
+        // Off in the settings: no forecast
+        Heater.prefs(app).edit().putBoolean(History.PREDICT, false).commit()
+        advance(60_000)
+        assertEquals(android.view.View.GONE, a.findViewById<android.view.View>(R.id.forecastBlock).visibility)
+    }
+
     @Test fun statusRequest() {
         configure()
         val a = launch()
@@ -320,6 +384,16 @@ class UiTest {
         advance(Heater.replyTimeout(app) + 1_000)
         assertEquals("Отопитель выключился, так и не разгоревшись", text(a, R.id.message))
         assertEquals(listOf(Heater.ERROR_SOUND), sounds)
+    }
+
+    /** "Непонятный ответ" left by v1.22 goes away when the app opens */
+    @Test fun oldUnknownReplyCleared() {
+        configure()
+        Heater.prefs(app).edit().putString(Heater.MESSAGE, "Непонятный ответ Altox:\nWebasto diagnostics\nFault code: none")
+            .putString("unknownReply", "x").commit()
+        val a = launch()
+        assertEquals("", text(a, R.id.message))
+        assertFalse(Heater.prefs(app).contains("unknownReply"))
     }
 
     /** Fault codes nobody asked for: ignored */
@@ -1095,6 +1169,9 @@ class UiTest {
     private fun launch(): MainActivity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
 
     private fun text(a: Activity, id: Int) = a.findViewById<android.widget.TextView>(id).text.toString()
+
+    /** "≈ 23 °C" -> 23; redrawn once a minute, so within a degree of the exact value */
+    private fun forecast(a: Activity) = text(a, R.id.forecast).filter { it.isDigit() || it == '-' }.toDouble()
 
     private fun power(a: Activity) = a.findViewById<RoundButton>(R.id.power)
     private fun status(a: Activity) = a.findViewById<RoundButton>(R.id.status)

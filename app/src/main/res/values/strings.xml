@@ -17,5 +17,8 @@
     <string name="fault_codes">Коды ошибок Webasto</string>
     <string name="read_faults">Прочитать коды ошибок (1 SMS)</string>
     <string name="erase_faults">Стереть коды ошибок (2 SMS)</string>
+    <string name="cooling">Прогноз остывания мотора</string>
+    <string name="predict">Показывать прогноз температуры ОЖ</string>
+    <string name="fan">Webasto включает вентилятор печки</string>
     <string name="save">Сохранить</string>
 </resources>

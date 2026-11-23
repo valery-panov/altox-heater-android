@@ -15,11 +15,16 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.net.Uri
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.View
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
     private lateinit var power: RoundButton
@@ -34,6 +39,14 @@ class MainActivity : Activity() {
     private lateinit var flame: FlameView
     private lateinit var statusInfo: TextView
     private lateinit var statusTime: TextView
+    private lateinit var forecastBlock: View
+    private lateinit var forecast: TextView
+    private lateinit var forecastNote: TextView
+    private lateinit var historyCard: View
+    private lateinit var chart: HistoryView
+    private lateinit var historyList: LinearLayout
+    /** The minute the history was drawn for: it changes slowly, no need to redraw 10 times a second */
+    private var historyMinute = -1L
 
     private val prefs by lazy { Heater.prefs(this) }
     private var sliderEditable = false
@@ -50,6 +63,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Heater.migrate(this)
         setContentView(R.layout.activity_main)
         power = findViewById(R.id.power)
         caption = findViewById(R.id.caption)
@@ -63,6 +77,13 @@ class MainActivity : Activity() {
         flame = findViewById(R.id.flame)
         statusInfo = findViewById(R.id.statusInfo)
         statusTime = findViewById(R.id.statusTime)
+        forecastBlock = findViewById(R.id.forecastBlock)
+        forecast = findViewById(R.id.forecast)
+        forecastNote = findViewById(R.id.forecastNote)
+        historyCard = findViewById(R.id.historyCard)
+        chart = findViewById(R.id.chart)
+        historyList = findViewById(R.id.historyList)
+        findViewById<TextView>(R.id.legend).text = legend()
 
         status.label = getString(R.string.status)
         status.labelSize = power.subSize * 1.1f
@@ -280,7 +301,120 @@ class MainActivity : Activity() {
                 "${value(Heater.CABIN, "°C")}\n" +
                 value(Heater.VOLTAGE, "В")
         }
+        historyMinute = -1
         renderFrame()
+    }
+
+    /** The forecast, the chart and the last runs; once a minute and on each change */
+    private fun renderHistory(now: Long) {
+        val f = History.forecast(prefs, now)
+        forecastBlock.visibility = if (f == null) View.GONE else View.VISIBLE
+        if (f != null) {
+            forecast.text = "≈ ${f.coolant.roundToInt()} °C"
+            val air = if (History.fan(prefs)) "салон без нагрева" else "салон"
+            val speed = if (f.samples == 0) "Скорость остывания пока средняя, уточнится по статусам между нагревами"
+                else "Скорость остывания по прошлым остываниям (${f.samples})"
+            val engine = when {
+                f.from.engine -> " Мотор в момент замера работал (${fmt(f.from.voltage!!)} В): считаем, что его заглушили сразу после."
+                f.warmed -> " Перед замером мотор работал."
+                else -> ""
+            }
+            forecastNote.text = "Замер ${fmt(f.from.coolant!!)} °C ${dayTime(f.from.t)}, воздух ≈ ${fmt(f.ambient)} °C ($air).$engine " +
+                "$speed. Поездку после замера покажет только следующий статус."
+        }
+
+        val readings = History.readings(prefs)
+        val runs = History.runs(prefs)
+        val trips = History.trips(readings, runs, History.fan(prefs))
+        historyCard.visibility = if (readings.isEmpty() && runs.isEmpty()) View.GONE else View.VISIBLE
+        chart.readings = readings
+        chart.runs = runs
+        chart.trips = trips
+        chart.forecast = f
+        chart.now = now
+        chart.invalidate()
+
+        historyList.removeAllViews()
+        val rows = runs.map { it.start to runRow(it, readings, now) } + trips.map { it.start to tripRow(it) }
+        for ((_, v) in rows.sortedBy { it.first }.takeLast(HISTORY_ROWS).reversed()) historyList.addView(v)
+    }
+
+    /** "сегодня 08:40   мотор работал · ОЖ до 88 °C, 14.2 В" */
+    private fun tripRow(t: History.Trip): View {
+        val coolant = t.maxCoolant?.let { " · ОЖ ${if (t.voltage != null) "до " else ""}${fmt(it)}\u00A0°C" } ?: ""
+        val text = if (t.voltage != null) "мотор работал$coolant, ${fmt(t.voltage)}\u00A0В"
+            else "до замера работал мотор$coolant"
+        return row(dayTime(t.start), text, R.color.text_secondary)
+    }
+
+    /** "сегодня 07:10   20 мин · 8 → 62 °C", the error in red instead of the numbers */
+    private fun runRow(r: History.Run, readings: List<History.Reading>, now: Long): View {
+        val (from, max) = History.coolantRange(readings, r, now)
+        val temps = if (from != null && max != null) " · ${fmt(from)} → ${fmt(max)}\u00A0°C" else ""
+        val moving = if (History.onTheMove(readings, r)) ", на ходу" else ""
+        val minutes = ((if (r.end > 0) r.end else now) - r.start + 30_000) / 60_000
+        val (text, color) = when (r.result) {
+            "" -> "идёт $minutes\u00A0мин$temps$moving" to R.color.text
+            // The STATUS after the end comes a little later: the run's own time
+            History.RESULT_OK -> "${if (r.minutes > 0) r.minutes else minutes}\u00A0мин$temps$moving" to R.color.text
+            History.RESULT_STOPPED -> "$minutes\u00A0мин$temps, остановлен$moving" to R.color.text
+            History.RESULT_UNKNOWN -> "~${r.minutes}\u00A0мин$temps$moving" to R.color.text
+            else -> r.result + temps + moving to R.color.error
+        }
+        return row(dayTime(r.start), text, color)
+    }
+
+    private fun row(time: String, text: CharSequence, color: Int): View {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val pad = (3 * resources.displayMetrics.density).toInt()
+        fun cell(text: CharSequence, weight: Float, color: Int) = TextView(this).apply {
+            this.text = text
+            textSize = 14f
+            setTextColor(getColor(color))
+            setPadding(0, pad, 0, pad)
+            fontFeatureSettings = "tnum"
+            layoutParams = LinearLayout.LayoutParams(if (weight > 0) 0 else LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT, weight)
+        }
+        row.addView(cell(time, 0f, R.color.text_secondary).apply { minWidth = (118 * resources.displayMetrics.density).toInt() })
+        row.addView(cell(text, 1f, color))
+        return row
+    }
+
+    private fun legend(): CharSequence {
+        val b = SpannableStringBuilder()
+        fun item(mark: String, color: Int, name: String) {
+            val at = b.length
+            b.append(mark)
+            b.setSpan(ForegroundColorSpan(getColor(color)), at, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            b.append(" $name   ")
+        }
+        item("●", R.color.btn_on, "ОЖ")
+        item("●", R.color.btn_status, "салон")
+        item("■", R.color.chart_run, "нагрев")
+        item("■", R.color.chart_engine, "мотор")
+        return b.trimEnd()
+    }
+
+    /** 9.0 -> "9", 12.5 -> "12.5" */
+    private fun fmt(v: Double) = if (v == Math.floor(v)) v.toLong().toString() else String.format(Locale.US, "%.1f", v)
+
+    /** "сегодня 07:30", "вчера 23:10", "14 окт 04:01" */
+    private fun dayTime(ms: Long): String {
+        val c = Calendar.getInstance().apply { timeInMillis = ms }
+        return String.format(Locale.US, "%s %02d:%02d", day(c, Heater.now()), c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE))
+    }
+
+    private fun day(c: Calendar, now: Long): String {
+        val today = Calendar.getInstance().apply { timeInMillis = now }
+        val yesterday = Calendar.getInstance().apply { timeInMillis = now; add(Calendar.DAY_OF_YEAR, -1) }
+        fun sameDay(a: Calendar, b: Calendar) =
+            a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+        return when {
+            sameDay(c, today) -> "сегодня"
+            sameDay(c, yesterday) -> "вчера"
+            else -> "${c.get(Calendar.DAY_OF_MONTH)} ${MONTHS[c.get(Calendar.MONTH)]}"
+        }
     }
 
     /** Timers and progress rings, 10 times a second */
@@ -344,6 +478,10 @@ class MainActivity : Activity() {
             }
         }
 
+        if (now / 60_000 != historyMinute) {
+            historyMinute = now / 60_000
+            renderHistory(now)
+        }
         val time = prefs.getLong(Heater.STATUS_TIME, 0)
         if (time > 0) statusTime.text = "Обновлено: " + whenText(time, now)
         val error = state == Heater.ON && prefs.getBoolean(Heater.ERROR, false)
@@ -413,16 +551,7 @@ class MainActivity : Activity() {
             }
         }
         val c = Calendar.getInstance().apply { timeInMillis = ms }
-        val today = Calendar.getInstance().apply { timeInMillis = now }
-        val yesterday = Calendar.getInstance().apply { timeInMillis = now; add(Calendar.DAY_OF_YEAR, -1) }
-        fun sameDay(a: Calendar, b: Calendar) =
-            a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
-        val day = when {
-            sameDay(c, today) -> "сегодня"
-            sameDay(c, yesterday) -> "вчера"
-            else -> "${c.get(Calendar.DAY_OF_MONTH)} ${MONTHS[c.get(Calendar.MONTH)]}"
-        }
-        return String.format(Locale.US, "%s %02d:%02d:%02d", day,
+        return String.format(Locale.US, "%s %02d:%02d:%02d", day(c, now),
             c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), c.get(Calendar.SECOND))
     }
 
@@ -431,6 +560,8 @@ class MainActivity : Activity() {
         const val STEP = 100
         /** How long to hold Пуск/Стоп and Статус */
         const val HOLD_MS = 750L
+        /** Runs listed under the chart */
+        const val HISTORY_ROWS = 3
         private val MONTHS = listOf("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
     }
 }

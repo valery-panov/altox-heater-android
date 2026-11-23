@@ -150,6 +150,32 @@
             style="@style/Label"
             android:layout_marginTop="4dp" />
 
+        <!-- The coolant's forecast on the main screen, see History -->
+        <TextView style="@style/Label" android:text="@string/cooling" />
+
+        <CheckBox
+            android:id="@+id/predict"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/predict"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
+
+        <CheckBox
+            android:id="@+id/fan"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/fan"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/coolingNote"
+            style="@style/Label"
+            android:layout_marginTop="2dp" />
+
         <!-- Tap: the system's sound picker -->
         <TextView style="@style/Label" android:text="@string/finish_sound" />
 

@@ -16,6 +16,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.telephony.SubscriptionManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.RadioButton
@@ -43,6 +44,9 @@ class SettingsActivity : Activity() {
     private lateinit var faultsInfo: TextView
     private lateinit var readFaults: TextView
     private lateinit var eraseFaults: TextView
+    private lateinit var predict: CheckBox
+    private lateinit var fan: CheckBox
+    private lateinit var coolingNote: TextView
     /** Picked sounds, saved with the rest: "" silent */
     private var finishUri = ""
     private var errorUri = ""
@@ -87,6 +91,14 @@ class SettingsActivity : Activity() {
         readFaults.setOnClickListener { if (canSend()) Heater.readFaultsNow(this) }
         eraseFaults = findViewById(R.id.eraseFaults)
         eraseFaults.setOnClickListener { if (canSend()) confirmErase() }
+
+        predict = findViewById(R.id.predict)
+        fan = findViewById(R.id.fan)
+        coolingNote = findViewById(R.id.coolingNote)
+        predict.isChecked = History.predict(prefs)
+        fan.isChecked = History.fan(prefs)
+        predict.setOnCheckedChangeListener { _, _ -> updateSave() }
+        fan.setOnCheckedChangeListener { _, _ -> updateSave() }
 
         fillSims()
         if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED)
@@ -167,7 +179,17 @@ class SettingsActivity : Activity() {
             delay() != savedDelay() ||
             count() != savedCount() ||
             finishUri != savedSound(Heater.FINISH_SOUND) ||
-            errorUri != savedSound(Heater.ERROR_SOUND)
+            errorUri != savedSound(Heater.ERROR_SOUND) ||
+            predict.isChecked != History.predict(prefs) ||
+            fan.isChecked != History.fan(prefs)
+        fan.isEnabled = predict.isChecked
+        coolingNote.text = when {
+            !predict.isChecked -> "Прогноза нет: на главном экране только последний замер."
+            fan.isChecked -> "ОЖ остывает к температуре воздуха. Салон греется вместе с мотором, " +
+                "поэтому воздух берётся по салону до нагрева или через час после него."
+            else -> "ОЖ остывает к температуре воздуха, её даёт салон: он почти не греется от мотора. " +
+                "Скорость остывания уточняется по статусам между нагревами."
+        }
         flameDelayLabel.text = "${delay()} мин"
         finishSound.text = soundTitle(finishUri)
         errorSound.text = soundTitle(errorUri)
@@ -304,6 +326,8 @@ class SettingsActivity : Activity() {
             .putString(Heater.PHONE, number)
             .putInt(Heater.SIM_SLOT, sim.checkedRadioButtonId - ID_BASE)
             .putString(Heater.PASSWORD, password.text.toString().trim())
+            .putBoolean(History.PREDICT, predict.isChecked)
+            .putBoolean(History.FAN, fan.isChecked)
             .commit()
         // Timeouts, the end check and the periodic STATUS are planned from these settings
         Heater.planPeriodic(this)

@@ -153,6 +153,17 @@ object Heater {
     fun prefs(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences("heater", Context.MODE_PRIVATE)
 
+    /**
+     * Before v1.23 an SMS that was not a status reply (the balance, READ's reply) became the error
+     * "Непонятный ответ Altox", kept until the next command; now such SMS are ignored
+     */
+    fun migrate(ctx: Context) {
+        val p = prefs(ctx)
+        val e = p.edit().remove("unknownReply").remove("unknownAt")
+        if (p.getString(MESSAGE, "").orEmpty().startsWith("Непонятный ответ Altox")) e.remove(MESSAGE)
+        e.commit()
+    }
+
     fun isConfigured(ctx: Context) = !prefs(ctx).getString(PHONE, "").isNullOrBlank()
 
     /** The saved run time, snapped to the nearest step */
@@ -373,7 +384,10 @@ object Heater {
             .putLong(POLL_AT, 0)
             .putLong(STATUS_SENT, 0)
             .putString(MESSAGE, message)
-        if (state == STARTING) e.putBoolean(IGNITING, false)
+        if (state == STARTING) {
+            e.putBoolean(IGNITING, false)
+            History.failedRun(ctx, p.getLong(PENDING_SINCE, now()), now(), minutes(ctx), "Не запустился")
+        }
         if (state == STOPPING && !p.getString(FORCED_STOP, "").isNullOrEmpty()) {
             // Not off after our own STOP: the error state, on with an unknown end
             e.putString(STATE, ON).putBoolean(ERROR, true).putString(FORCED_STOP, "")
@@ -760,6 +774,8 @@ object Heater {
         if (s == null) return
         val now = at
         val state = p.getString(STATE, OFF)
+        History.addReading(ctx, History.Reading(now, s.coolant?.toDoubleOrNull(), s.cabin?.toDoubleOrNull(),
+            s.voltage?.toDoubleOrNull(), s.on, s.flame == true))
         // Flickers from START to the first FLAME: YES, or to the reply to the flame STATUS
         val igniting = p.getBoolean(IGNITING, false)
         val flameCheckDone = igniting && p.getLong(FLAME_CHECK_AT, 0) == 0L && state == ON
@@ -795,6 +811,7 @@ object Heater {
                     .putLong(RUN_TOTAL, run).putLong(ENDS_AT, sentAt + run).putLong(POLL_AT, 0)
                     .putLong(FLAME_CHECK_AT, if (burning) 0 else sentAt + flameDelay(ctx))
                     .putString(START_COOLANT, s.coolant)
+                History.startRun(ctx, sentAt, minutes(ctx))
             }
             state == STOPPING && s.on == false -> {
                 e.putString(STATE, OFF).putLong(POLL_AT, 0).putString(FORCED_STOP, "")
@@ -803,6 +820,11 @@ object Heater {
                     STOP_NO_FLAME -> e.putString(MESSAGE, p.getString(MESSAGE, "").orEmpty()
                         .replace("отправлен STOP", "отопитель остановлен"))
                 }
+                History.endRun(ctx, now, when (p.getString(FORCED_STOP, "")) {
+                    STOP_END -> History.RESULT_OK
+                    STOP_NO_FLAME -> "Нет пламени"
+                    else -> History.RESULT_STOPPED
+                })
             }
             isPending(state) -> {
                 // Not yet the wanted state, or a reply without HEATER ON/OFF: ask again
@@ -827,6 +849,7 @@ object Heater {
                 e.putString(STATE, ON).putLong(ON_SINCE, now).putBoolean(END_CHECKED, false)
                     .putLong(RUN_TOTAL, run).putLong(ENDS_AT, if (run > 0) now + run else 0)
                     .putLong(FLAME_CHECK_AT, 0)
+                History.startRun(ctx, now, (s.minutes ?: 0).toInt())
             }
             s.on == true && state == ON && p.getBoolean(END_CHECKED, false) -> {
                 // Still on after the end: the module should have stopped it, so we do
@@ -840,15 +863,20 @@ object Heater {
                 val ended = p.getBoolean(END_CHECKED, false)
                 if (state == ON && ended) sound = FINISH_SOUND
                 val endsAt = p.getLong(ENDS_AT, 0)
+                // Off at last after the error "still on at the end"
+                var result = if (p.getBoolean(ERROR, false)) "Не выключился в конце цикла" else History.RESULT_OK
                 if (state == ON && igniting && !burning && !ended) {
                     // Webasto gives up on a failed ignition and switches off
                     e.putString(MESSAGE, "Отопитель выключился, так и не разгоревшись")
                     sound = ERROR_SOUND
+                    result = "Не разгорелся"
                 } else if (state == ON && endsAt > 0 && now < endsAt - EARLY_STOP) {
                     val left = (endsAt - now + 59_999) / 60_000
                     e.putString(MESSAGE, "Отопитель выключился раньше срока, за $left мин до конца")
                     sound = ERROR_SOUND
+                    result = "Выключился за $left мин до конца"
                 }
+                if (state == ON) History.endRun(ctx, now, result)
             }
         }
         e.commit()
