@@ -89,6 +89,8 @@ class MainActivity : Activity() {
         status.labelSize = power.subSize * 1.1f
         status.subSize = power.subSize * 0.85f
         // Against taps from a pocket or a stray finger: a command only after holding the button
+        // Пуск is a wide rounded rectangle: the screen has no height to spare for a circle
+        power.corner = 24 * resources.displayMetrics.density
         for (b in listOf(power, status)) b.holdMs = HOLD_MS
         power.hint = "удерживайте\n1 секунду"
         status.hint = "удерживайте"

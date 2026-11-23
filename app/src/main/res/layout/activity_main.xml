@@ -231,8 +231,8 @@
 
     <io.github.altoxheater.RoundButton
         android:id="@+id/power"
-        android:layout_width="150dp"
-        android:layout_height="150dp"
+        android:layout_width="280dp"
+        android:layout_height="96dp"
         android:layout_marginTop="10dp" />
 
     <!-- Title left, value right with fixed-width digits: nothing moves while dragging or ticking -->
